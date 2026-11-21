@@ -11,7 +11,19 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 
 find_package(Python 3.15 REQUIRED COMPONENTS Interpreter Development.Module)
 set(PYBIND11_FINDPYTHON ON)
-find_package(pybind11 3.1.0 CONFIG REQUIRED)
+find_package(pybind11 3.1.0 CONFIG QUIET)
+if(NOT pybind11_FOUND)
+    # A pip installation puts its CMake package under the interpreter's site-packages.
+    set(pybind11_cmake_dir "")
+    if(NOT CMAKE_CROSSCOMPILING)
+        execute_process(
+            COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir
+            OUTPUT_VARIABLE pybind11_cmake_dir
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+    endif()
+    find_package(pybind11 3.1.0 CONFIG REQUIRED HINTS "${pybind11_cmake_dir}")
+endif()
 include(cmake/Dependencies.cmake)
 
 add_library(syntwine_platform STATIC src/tokenizer.cpp src/writer.cpp)

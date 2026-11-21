@@ -167,5 +167,27 @@ python -P -m unittest discover -s tests -v
 To check the consumer typing examples, run
 `mypy --strict --python-version 3.15 tests/typing_contract.py`.
 
+### Native development with CMake and clangd
+
+From the repository root, with uv and Ninja installed (skip `uv venv` if
+the checkout already has a CPython 3.15+ virtual environment):
+
+```sh
+uv venv --python 3.15
+uv pip install pybind11==3.1.0
+cmake --preset dev
+```
+
+CMake prefers an active virtual environment, with the checkout's `.venv` as a
+hint when configuring from an IDE or an unactivated shell. CMake finds
+pybind11 in the selected Python environment if it is not already
+available through CMake's package search. The preset generates
+`build/compile_commands.json`, which clangd discovers automatically. Configuring
+is enough for editor support; no extension build or symlink is needed.
+
+Run `cmake --build --preset dev` to build the native extension and run the
+native regression tests. Use `ctest --preset dev` to rerun them without rebuilding.
+Keep machine-specific overrides in the Git-ignored `CMakeUserPresets.json`.
+
 See the [native architecture notes](docs/architecture.md) for design
 decisions and [GOAL.md](GOAL.md) for the API contract and acceptance matrix.
