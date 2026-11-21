@@ -11,7 +11,7 @@ Use the project's existing Python environment and check that it can import
 `syntwine`. On Unix an existing `.venv` uses `.venv/bin/python`; on Windows it
 uses `.venv\Scripts\python.exe`. If Syntwine is missing, select the
 [release wheel](https://github.com/kleedaisuki/syntwine/releases) matching the
-interpreter, OS, and architecture. The v0.1.0 wheels target CPython 3.15.
+interpreter, OS, and architecture.
 Install the downloaded file into that environment with
 `uv pip install --python <env-python> <wheel-file>`, or use that interpreter's
 `-m pip install <wheel-file>` if pip is available.
@@ -42,5 +42,6 @@ assert artifact.text == "# Notes\n\nReady."
 | Select dependencies from data at build time or add Python callbacks | [Lazy graphs and callbacks](references/graphs.md) |
 | Count or cap output, investigate a build error, or profile a graph | [Budgets and diagnostics](references/diagnostics.md) |
 
-For an exact method signature, check the bundled `syntwine/__init__.pyi` for
-the installed version or the [stubs at v0.1.0](https://github.com/kleedaisuki/syntwine/blob/v0.1.0/python/syntwine/__init__.pyi).
+For an exact method signature, check the installed `syntwine/__init__.pyi`.
+If the package is not installed, read `python/syntwine/__init__.pyi` in the
+[release tag](https://github.com/kleedaisuki/syntwine/tags) you intend to use.
