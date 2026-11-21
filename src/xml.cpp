@@ -840,6 +840,198 @@ Value minify(const XmlResult& input, std::string_view policy)
     return tree_value(std::move(tree));
 }
 
+XML literal_source(py::object source)
+{
+    if (!py::isinstance<py::str>(source) && !py::isinstance<py::bytes>(source))
+        throw py::type_error("XML expects str or bytes");
+    return XML(make_node("xml.literal", Kind::xml, {}, [source = std::move(source)](Session&) {
+        return xml_from_python(source);
+    }, true, {}, {}, "parse.xml"));
+}
+
+py::bytes xml_source_bytes(const XMLValue& value)
+{
+    return py::bytes(value.serialize());
+}
+
+XML xpath_source(const XML& self, std::string expression, py::object namespaces)
+{
+    return select_xpath(self, std::move(expression), namespaces, false);
+}
+
+XML find_source(const XML& self, std::string path, py::object namespaces)
+{
+    return select_xpath(self, std::move(path), namespaces, true);
+}
+
+XML children_source(const XML& self, std::optional<std::string> name)
+{
+    return XML(xml_node(self, "xml.children", Kind::xml, [name = std::move(name)](const XmlResult& source) {
+        std::vector<xmlNode*> out;
+        std::unordered_set<xmlNode*> seen;
+        for (auto* root : active_nodes(source)) {
+            if (root->type != XML_ELEMENT_NODE)
+                continue;
+            for (auto* child = root->children; child; child = child->next) {
+                if (child->type == XML_ELEMENT_NODE && (!name || name_matches(child, *name)) &&
+                    seen.insert(child).second)
+                    out.push_back(child);
+            }
+        }
+        return selection(source, std::move(out));
+    }));
+}
+
+Text text_source(const XML& self, std::string separator)
+{
+    return Text(xml_node(self, "xml.text", Kind::text,
+        [separator = std::move(separator)](const XmlResult& source) -> Value {
+            std::string out;
+            bool first = true;
+            for (auto* node : active_nodes(source)) {
+                if (node->type == XML_COMMENT_NODE || node->type == XML_PI_NODE || !copyable(node))
+                    continue;
+                if (!first)
+                    out += separator;
+                out += node_text(node);
+                first = false;
+            }
+            return Utf8{std::move(out)};
+        }));
+}
+
+XML set_text_source(const XML& self, py::object value)
+{
+    return modify(self, "xml.set_text", std::move(value),
+        [](NativeDocument& tree, Session& session, py::handle arg) {
+            auto text = text_operand(session.resolve(arg));
+            py::gil_scoped_release release;
+            replace_text(tree, text);
+        });
+}
+
+XML set_attr_source(const XML& self, std::string name, py::object value)
+{
+    return modify(self, "xml.set_attr", std::move(value),
+        [name = std::move(name)](NativeDocument& tree, Session& session, py::handle arg) {
+            auto attr = qualified_name(name);
+            if (is_namespace_declaration(attr))
+                throw Error(ErrorCode::operation, "declare XML namespaces in XML.element(attrs=...)");
+            auto text = text_operand(session.resolve(arg));
+            py::gil_scoped_release release;
+            on_elements(tree, [&](xmlNode* root) { set_attr(root, attr, text); });
+        });
+}
+
+XML remove_attr_source(const XML& self, std::string name)
+{
+    return modify(self, "xml.remove_attr", py::none(),
+        [name = std::move(name)](NativeDocument& tree, Session&, py::handle) {
+            auto attr = qualified_name(name);
+            if (is_namespace_declaration(attr))
+                throw Error(ErrorCode::operation, "XML namespace declarations are not attributes");
+            py::gil_scoped_release release;
+            on_elements(tree, [&](xmlNode* root) {
+                auto* ns = find_namespace(root, attr);
+                xmlUnsetNsProp(root, ns, bytes(attr.local));
+            });
+        });
+}
+
+XML append_source(const XML& self, py::args contents)
+{
+    return modify(self, "xml.append", std::move(contents),
+        [](NativeDocument& tree, Session& session, py::handle arg) {
+            auto operands = resolve_contents(session, py::reinterpret_borrow<py::tuple>(arg));
+            on_elements(tree, [&](xmlNode* root) {
+                for (const auto& value : operands)
+                    add_operand(root, value);
+            });
+        });
+}
+
+XML prepend_source(const XML& self, py::args contents)
+{
+    return modify(self, "xml.prepend", std::move(contents),
+        [](NativeDocument& tree, Session& session, py::handle arg) {
+            auto operands = resolve_contents(session, py::reinterpret_borrow<py::tuple>(arg));
+            on_elements(tree, [&](xmlNode* root) {
+                for (const auto& value : std::views::reverse(operands))
+                    add_operand(root, value, true);
+            });
+        });
+}
+
+XML replace_source(const XML& self, py::args contents)
+{
+    return modify(self, "xml.replace", std::move(contents),
+        [](NativeDocument& tree, Session& session, py::handle arg) {
+            auto operands = resolve_contents(session, py::reinterpret_borrow<py::tuple>(arg));
+            tree = {new_doc(), false};
+            for (const auto& value : operands)
+                add_operand(doc_node(tree.doc.get()), value);
+        });
+}
+
+XML wrap_xml_source(const XML& self, std::string name)
+{
+    return XML(xml_node(self, "xml.wrap", Kind::xml, [name = std::move(name)](const XmlResult& source) {
+        auto doc = new_doc();
+        auto qualified = qualified_name(name);
+        auto root = new_element(doc.get(), qualified);
+        if (!qualified.prefix.empty()) {
+            auto nodes = active_nodes(source);
+            xmlNs* ns = nullptr;
+            for (auto* node : nodes) {
+                if (node->type == XML_ELEMENT_NODE)
+                    ns = xmlSearchNs(node->doc, node, bytes(qualified.prefix));
+                if (ns)
+                    break;
+            }
+            if (!ns)
+                throw Error(ErrorCode::operation, "XML wrapper namespace prefix is not declared: " + qualified.prefix);
+            auto* exported = xmlNewNs(root.get(), ns->href, ns->prefix);
+            if (!exported)
+                throw std::bad_alloc();
+            xmlSetNs(root.get(), exported);
+        }
+        copy_active(root.get(), source);
+        xmlDocSetRootElement(doc.get(), root.release());
+        return tree_value({std::move(doc), false});
+    }));
+}
+
+XML unwrap_source(const XML& self)
+{
+    return XML(xml_node(self, "xml.unwrap", Kind::xml, [](const XmlResult& source) {
+        auto doc = new_doc();
+        auto* parent = doc_node(doc.get());
+        for (auto* root : active_nodes(source)) {
+            if (root->type == XML_ELEMENT_NODE) {
+                for (auto* child = root->children; child; child = child->next)
+                    add_copy(parent, child);
+            } else if (copyable(root)) {
+                add_copy(parent, root);
+            }
+        }
+        return tree_value({std::move(doc), false});
+    }));
+}
+
+XML minify_source(const XML& self, std::string policy)
+{
+    return XML(xml_node(self, "xml.minify_whitespace", Kind::xml,
+        [policy = std::move(policy)](const XmlResult& input) { return minify(input, policy); }));
+}
+
+Literal serialize_source(const XML& self)
+{
+    auto root = self.node;
+    return Literal(make_node("xml.serialize", Kind::literal, {root}, [root](Session& session) -> Value {
+        return Bytes{serialize(session.eval(root))};
+    }));
+}
+
 } // namespace
 
 std::string xml_squish(std::string_view source, std::string_view policy)
@@ -853,170 +1045,28 @@ std::string xml_squish(std::string_view source, std::string_view policy)
 
 void bind_xml(py::module_& module)
 {
-    py::class_<XMLValue, XmlPtr>(module, "XMLValue")
-        .def_property_readonly("source", [](const XMLValue& value) { return py::bytes(value.serialize()); });
+    py::class_<XMLValue, XmlPtr> value(module, "XMLValue");
+    value.def_property_readonly("source", &xml_source_bytes);
     register_format(Kind::xml, parse_xml, xml_from_python);
 
-    py::class_<XML, Source>(module, "XML")
-        .def(py::init([](py::object source) {
-            if (!py::isinstance<py::str>(source) && !py::isinstance<py::bytes>(source))
-                throw py::type_error("XML expects str or bytes");
-            return XML(make_node("xml.literal", Kind::xml, {}, [source = std::move(source)](Session&) {
-                return xml_from_python(source);
-            }, true, {}, {}, "parse.xml"));
-        }), py::arg("source"))
-        .def_static("element", create_element, py::arg("name"), py::arg("attrs") = py::none())
-        .def("xpath", [](const XML& self, std::string expression, py::object namespaces) {
-            return select_xpath(self, std::move(expression), namespaces, false);
-        }, py::arg("expression"), py::arg("namespaces") = py::none())
-        .def("find", [](const XML& self, std::string path, py::object namespaces) {
-            return select_xpath(self, std::move(path), namespaces, true);
-        }, py::arg("path"), py::arg("namespaces") = py::none())
-        .def("children", [](const XML& self, std::optional<std::string> name) {
-            return XML(xml_node(self, "xml.children", Kind::xml, [name = std::move(name)](const XmlResult& source) {
-                std::vector<xmlNode*> out;
-                std::unordered_set<xmlNode*> seen;
-                for (auto* root : active_nodes(source)) {
-                    if (root->type != XML_ELEMENT_NODE)
-                        continue;
-                    for (auto* child = root->children; child; child = child->next) {
-                        if (child->type == XML_ELEMENT_NODE && (!name || name_matches(child, *name)) &&
-                            seen.insert(child).second)
-                            out.push_back(child);
-                    }
-                }
-                return selection(source, std::move(out));
-            }));
-        }, py::arg("name") = py::none())
-        .def("text", [](const XML& self, std::string separator) {
-            return Text(xml_node(self, "xml.text", Kind::text,
-                [separator = std::move(separator)](const XmlResult& source) -> Value {
-                    std::string out;
-                    bool first = true;
-                    for (auto* node : active_nodes(source)) {
-                        if (node->type == XML_COMMENT_NODE || node->type == XML_PI_NODE || !copyable(node))
-                            continue;
-                        if (!first)
-                            out += separator;
-                        out += node_text(node);
-                        first = false;
-                    }
-                    return Utf8{std::move(out)};
-                }));
-        }, py::arg("separator") = "")
-        .def("set_text", [](const XML& self, py::object value) {
-            return modify(self, "xml.set_text", std::move(value),
-                [](NativeDocument& tree, Session& session, py::handle arg) {
-                    auto text = text_operand(session.resolve(arg));
-                    py::gil_scoped_release release;
-                    replace_text(tree, text);
-                });
-        }, py::arg("value"))
-        .def("set_attr", [](const XML& self, std::string name, py::object value) {
-            return modify(self, "xml.set_attr", std::move(value),
-                [name = std::move(name)](NativeDocument& tree, Session& session, py::handle arg) {
-                    auto attr = qualified_name(name);
-                    if (is_namespace_declaration(attr))
-                        throw Error(ErrorCode::operation, "declare XML namespaces in XML.element(attrs=...)");
-                    auto text = text_operand(session.resolve(arg));
-                    py::gil_scoped_release release;
-                    on_elements(tree, [&](auto* root) { set_attr(root, attr, text); });
-                });
-        }, py::arg("name"), py::arg("value"))
-        .def("remove_attr", [](const XML& self, std::string name) {
-            return modify(self, "xml.remove_attr", py::none(),
-                [name = std::move(name)](NativeDocument& tree, Session&, py::handle) {
-                    auto attr = qualified_name(name);
-                    if (is_namespace_declaration(attr))
-                        throw Error(ErrorCode::operation, "XML namespace declarations are not attributes");
-                    py::gil_scoped_release release;
-                    on_elements(tree, [&](auto* root) {
-                        auto* ns = find_namespace(root, attr);
-                        xmlUnsetNsProp(root, ns, bytes(attr.local));
-                    });
-                });
-        }, py::arg("name"))
-        .def("append", [](const XML& self, py::args contents) {
-            return modify(self, "xml.append", std::move(contents),
-                [](NativeDocument& tree, Session& session, py::handle arg) {
-                    auto operands = resolve_contents(session, py::reinterpret_borrow<py::tuple>(arg));
-                    on_elements(tree, [&](auto* root) {
-                        for (const auto& value : operands)
-                            add_operand(root, value);
-                    });
-                });
-        })
-        .def("prepend", [](const XML& self, py::args contents) {
-            return modify(self, "xml.prepend", std::move(contents),
-                [](NativeDocument& tree, Session& session, py::handle arg) {
-                    auto operands = resolve_contents(session, py::reinterpret_borrow<py::tuple>(arg));
-                    on_elements(tree, [&](auto* root) {
-                        for (const auto& value : std::views::reverse(operands))
-                            add_operand(root, value, true);
-                    });
-                });
-        })
-        .def("replace", [](const XML& self, py::args contents) {
-            return modify(self, "xml.replace", std::move(contents),
-                [](NativeDocument& tree, Session& session, py::handle arg) {
-                    auto operands = resolve_contents(session, py::reinterpret_borrow<py::tuple>(arg));
-                    tree = {new_doc(), false};
-                    for (const auto& value : operands)
-                        add_operand(doc_node(tree.doc.get()), value);
-                });
-        })
-        .def("remove", remove_nodes, py::arg("path") = py::none(), py::arg("namespaces") = py::none())
-        .def("wrap", [](const XML& self, std::string name) {
-            return XML(xml_node(self, "xml.wrap", Kind::xml, [name = std::move(name)](const XmlResult& source) {
-                auto doc = new_doc();
-                auto qualified = qualified_name(name);
-                auto root = new_element(doc.get(), qualified);
-                if (!qualified.prefix.empty()) {
-                    auto nodes = active_nodes(source);
-                    xmlNs* ns = nullptr;
-                    for (auto* node : nodes) {
-                        if (node->type == XML_ELEMENT_NODE)
-                            ns = xmlSearchNs(node->doc, node, bytes(qualified.prefix));
-                        if (ns)
-                            break;
-                    }
-                    if (!ns)
-                        throw Error(ErrorCode::operation, "XML wrapper namespace prefix is not declared: " + qualified.prefix);
-                    auto* exported = xmlNewNs(root.get(), ns->href, ns->prefix);
-                    if (!exported)
-                        throw std::bad_alloc();
-                    xmlSetNs(root.get(), exported);
-                }
-                copy_active(root.get(), source);
-                xmlDocSetRootElement(doc.get(), root.release());
-                return tree_value({std::move(doc), false});
-            }));
-        }, py::arg("name"))
-        .def("unwrap", [](const XML& self) {
-            return XML(xml_node(self, "xml.unwrap", Kind::xml, [](const XmlResult& source) {
-                auto doc = new_doc();
-                auto* parent = doc_node(doc.get());
-                for (auto* root : active_nodes(source)) {
-                    if (root->type == XML_ELEMENT_NODE) {
-                        for (auto* child = root->children; child; child = child->next)
-                            add_copy(parent, child);
-                    } else if (copyable(root)) {
-                        add_copy(parent, root);
-                    }
-                }
-                return tree_value({std::move(doc), false});
-            }));
-        })
-        .def("minify_whitespace", [](const XML& self, std::string policy) {
-            return XML(xml_node(self, "xml.minify_whitespace", Kind::xml,
-                [policy = std::move(policy)](const XmlResult& input) { return minify(input, policy); }));
-        }, py::arg("policy") = "markup_only")
-        .def("serialize", [](const XML& self) {
-            auto root = self.node;
-            return Literal(make_node("xml.serialize", Kind::literal, {root}, [root](Session& session) -> Value {
-                return Bytes{serialize(session.eval(root))};
-            }));
-        });
+    py::class_<XML, Source> xml(module, "XML");
+    xml.def(py::init(&literal_source), py::arg("source"));
+    xml.def_static("element", &create_element, py::arg("name"), py::arg("attrs") = py::none());
+    xml.def("xpath", &xpath_source, py::arg("expression"), py::arg("namespaces") = py::none());
+    xml.def("find", &find_source, py::arg("path"), py::arg("namespaces") = py::none());
+    xml.def("children", &children_source, py::arg("name") = py::none());
+    xml.def("text", &text_source, py::arg("separator") = "");
+    xml.def("set_text", &set_text_source, py::arg("value"));
+    xml.def("set_attr", &set_attr_source, py::arg("name"), py::arg("value"));
+    xml.def("remove_attr", &remove_attr_source, py::arg("name"));
+    xml.def("append", &append_source);
+    xml.def("prepend", &prepend_source);
+    xml.def("replace", &replace_source);
+    xml.def("remove", &remove_nodes, py::arg("path") = py::none(), py::arg("namespaces") = py::none());
+    xml.def("wrap", &wrap_xml_source, py::arg("name"));
+    xml.def("unwrap", &unwrap_source);
+    xml.def("minify_whitespace", &minify_source, py::arg("policy") = "markup_only");
+    xml.def("serialize", &serialize_source);
 }
 
 } // namespace syntwine
