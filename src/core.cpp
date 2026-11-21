@@ -153,6 +153,17 @@ bool stack_headroom() noexcept
 }
 #endif
 
+std::size_t evaluation_depth_limit(std::size_t configured) noexcept
+{
+#if defined(_WIN32)
+    // MSVC's exception dispatcher must also unwind the suspended callbacks.
+    // Free bytes alone do not bound that work on a deeply nested graph.
+    return std::min(configured, std::size_t{256});
+#else
+    return configured;
+#endif
+}
+
 struct RecursionGuard {
     explicit RecursionGuard(const char* where)
     {
@@ -469,7 +480,7 @@ Value Session::eval(const NodePtr& node)
         }
         return record.value;
     }
-    if (stack_.size() >= options_.max_depth) {
+    if (stack_.size() >= evaluation_depth_limit(options_.max_depth)) {
         Error error(ErrorCode::limit, "evaluation depth limit exceeded");
         annotate(error, node);
         throw error;

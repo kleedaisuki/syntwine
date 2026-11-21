@@ -365,11 +365,13 @@ class BuildTests(WorkspaceTest):
                 return Source.defer(expand).as_literal()
 
             assert finite(64).generate().bytes == b"finished"
+            print("finite graph built", flush=True)
             options = BuildOptions(max_depth=1_000_000, max_nodes=1_000_000)
             try:
                 Source.defer(expand).generate(options=options)
             except EvaluationLimit as error:
                 assert error.dependency_path
+                print("evaluation limit reported", flush=True)
             else:
                 raise AssertionError("unbounded expansion unexpectedly generated an output")
             """

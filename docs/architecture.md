@@ -14,6 +14,8 @@ Purity propagates through dependencies actually visited. A pure expression downs
 impure node is not memoized, including when the impure dependency is discovered dynamically.
 Evaluation enforces the configured node and depth limits as well as thread stack headroom,
 using the platform stack range and [CPython's native recursion guard](https://docs.python.org/3.15/c-api/exceptions.html#recursion-control).
+On Windows the effective evaluation depth is also capped at 256 to leave room for native
+exception unwinding; a lower user-configured limit takes precedence.
 Dropping the last reference to a deep static graph drains its nodes iteratively; it does not
 require a call stack as deep as the declaration graph.
 
