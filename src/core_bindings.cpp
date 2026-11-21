@@ -1,6 +1,7 @@
 #include "core.hpp"
 
 #include "budget.hpp"
+#include "evaluation_stop.hpp"
 #include "markdown.hpp"
 #include "telemetry.hpp"
 #include "writer.hpp"
@@ -502,7 +503,12 @@ Generated generate(const Source& source, py::object context, const std::optional
         Value value;
         {
             auto span = stage("graph.resolve");
-            value = session.eval(source.node);
+            try {
+                value = session.eval(source.node);
+            } catch (EvaluationStop& limit) {
+                span.fail("EvaluationLimit");
+                throw std::move(limit.error);
+            }
         }
         auto bytes = [&] {
             auto span = stage("output.serialize");

@@ -6,6 +6,7 @@
 #include "core.hpp"
 
 #include "budget.hpp"
+#include "evaluation_stop.hpp"
 #include "telemetry.hpp"
 
 #include <pybind11/stl.h>
@@ -483,12 +484,12 @@ Value Session::eval(const NodePtr& node)
     if (stack_.size() >= evaluation_depth_limit(options_.max_depth)) {
         Error error(ErrorCode::limit, "evaluation depth limit exceeded");
         annotate(error, node);
-        throw error;
+        throw EvaluationStop{std::move(error)};
     }
     if (inserted && records_.size() > options_.max_nodes) {
         Error error(ErrorCode::limit, "evaluation node limit exceeded");
         annotate(error, node);
-        throw error;
+        throw EvaluationStop{std::move(error)};
     }
     try {
         RecursionGuard guard(" while evaluating the Syntwine graph");
@@ -496,9 +497,11 @@ Value Session::eval(const NodePtr& node)
     } catch (Error& error) {
         annotate(error, node);
         record.state = State::failed;
+        if (error.code == ErrorCode::limit)
+            throw EvaluationStop{std::move(error)};
         record.failure = std::current_exception();
         throw;
-    } catch (...) {
+    } catch (const std::exception&) {
         record.state = State::failed;
         record.failure = std::current_exception();
         throw;
@@ -518,6 +521,8 @@ Value Session::evaluate(const NodePtr& node, Record& record)
     stack_.push_back({node, node->pure, {}});
     record.state = State::visiting;
     EvaluationFrame frame{[&] {
+        if (record.state == State::visiting)
+            record.state = State::failed;
         bool pure = stack_.back().pure;
         stack_.pop_back();
         if (!stack_.empty() && !pure)
