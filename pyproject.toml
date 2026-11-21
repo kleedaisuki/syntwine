@@ -1,5 +1,35 @@
+[build-system]
+requires = ["scikit-build-core==1.1.2", "pybind11==3.1.0"]
+build-backend = "scikit_build_core.build"
+
 [project]
 name = "syntwine"
 version = "0.1.0"
+description = "Lazy, typed document dataflow with a native C++ core"
+readme = "README.md"
 requires-python = ">=3.15"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 dependencies = []
+
+[tool.scikit-build]
+cmake.version = ">=3.28"
+wheel.packages = ["syntwine"]
+sdist.include = ["syntwine/tokenizer/*"]
+
+[tool.cibuildwheel]
+build = "cp315-*"
+skip = ["*-musllinux_*", "*-win32"]
+test-sources = ["tests"]
+test-command = "python -m unittest discover -s tests -v"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+manylinux-x86_64-image = "manylinux_2_34"
+before-all = "dnf -y install openssl-devel"
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+
+[tool.cibuildwheel.macos]
+archs = ["native"]
