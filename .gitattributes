@@ -1,1 +1,4 @@
 python/syntwine/tokenizer/*.tiktoken -text -diff linguist-generated=true
+.clang-format text eol=lf
+*.cpp text eol=lf
+*.hpp text eol=lf

@@ -200,5 +200,16 @@ Run `cmake --build --preset dev` to build the native extension and run the
 native regression tests. Use `ctest --preset dev` to rerun them without rebuilding.
 Keep machine-specific overrides in the Git-ignored `CMakeUserPresets.json`.
 
+### Format C++
+
+Use clang-format 22.1.8 with the checked-in `.clang-format` configuration.
+From a POSIX shell (Git Bash on Windows), run:
+
+```sh
+git ls-files -z -- '*.cpp' '*.hpp' | xargs -0 uvx clang-format@22.1.8 -i
+```
+
+CI checks the same files with `--dry-run --Werror`.
+
 See the [native architecture notes](docs/architecture.md) for design
 decisions and [GOAL.md](GOAL.md) for the API contract and acceptance matrix.

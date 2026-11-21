@@ -25,10 +25,16 @@ public:
     const std::string& id() const noexcept;
     bool records_dependencies() const noexcept;
     void dependency(std::uint64_t parent, std::uint64_t child, bool discovered) noexcept;
-    void event(std::string_view name, std::uint64_t node_id = 0,
-               std::string_view source_id = {}, std::string_view operation = {}) noexcept;
-    void finish(std::string_view error_code = {},
-                std::optional<std::string_view> content = std::nullopt) noexcept;
+    void event(
+        std::string_view name,
+        std::uint64_t node_id = 0,
+        std::string_view source_id = {},
+        std::string_view operation = {}
+    ) noexcept;
+    void finish(
+        std::string_view error_code = {},
+        std::optional<std::string_view> content = std::nullopt
+    ) noexcept;
     pybind11::dict view() const;
 
 private:
@@ -38,16 +44,24 @@ private:
 
 class Span {
 public:
-    Span(Trace* trace, std::string_view name, Level level = Level::operations,
-         std::uint64_t node_id = 0, std::string_view source_id = {},
-         std::string_view operation = {}) noexcept : trace_(trace) {
+    Span(
+        Trace* trace,
+        std::string_view name,
+        Level level = Level::operations,
+        std::uint64_t node_id = 0,
+        std::string_view source_id = {},
+        std::string_view operation = {}
+    ) noexcept
+        : trace_(trace) {
         if (trace_)
             begin(name, level, node_id, source_id, operation);
     }
+
     ~Span() {
         if (trace_)
             end();
     }
+
     Span(const Span&) = delete;
     Span& operator=(const Span&) = delete;
 
@@ -63,8 +77,13 @@ private:
     enum class Metric { none, native, python, token, node };
     static constexpr std::size_t no_record = static_cast<std::size_t>(-1);
 
-    void begin(std::string_view name, Level level, std::uint64_t node_id,
-               std::string_view source_id, std::string_view operation) noexcept;
+    void begin(
+        std::string_view name,
+        Level level,
+        std::uint64_t node_id,
+        std::string_view source_id,
+        std::string_view operation
+    ) noexcept;
     void end() noexcept;
 
     Trace* trace_;
@@ -77,8 +96,12 @@ private:
     bool output_stage_ = false;
 };
 
-std::unique_ptr<Trace> start(pybind11::handle config, std::uint64_t node_id = 0,
-                             std::string_view source_id = {}, std::string_view operation = {});
+std::unique_ptr<Trace> start(
+    pybind11::handle config,
+    std::uint64_t node_id = 0,
+    std::string_view source_id = {},
+    std::string_view operation = {}
+);
 void bind(pybind11::module_& module);
 
 } // namespace syntwine::telemetry

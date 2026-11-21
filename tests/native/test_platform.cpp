@@ -12,12 +12,14 @@ namespace {
 using namespace syntwine;
 using namespace std::string_view_literals;
 
-void check(bool condition, std::string_view why) {
+void
+check(bool condition, std::string_view why) {
     if (!condition)
         throw std::runtime_error(std::string(why));
 }
 
-void test_encoding() {
+void
+test_encoding() {
     check(utf8_characters("Hello, 世界🌍!\r\n") == 13, "UTF-8 counts code points");
     check(utf8_characters("a\0b"sv) == 3, "NUL is a code point");
     check(!utf8_characters("\xc0\x80"), "overlong UTF-8");
@@ -38,7 +40,8 @@ void test_encoding() {
     }
 }
 
-void test_writer(const std::filesystem::path& directory) {
+void
+test_writer(const std::filesystem::path& directory) {
     const auto path = directory / std::filesystem::path(u8"产物.bin");
     atomic_write(path, "initial");
     atomic_write(path, "\x00\xff\r\n"sv);
@@ -52,9 +55,11 @@ void test_writer(const std::filesystem::path& directory) {
 } // namespace
 
 #ifdef _WIN32
-int wmain(int argc, wchar_t* argv[]) {
+int
+wmain(int argc, wchar_t* argv[]) {
 #else
-int main(int argc, char* argv[]) {
+int
+main(int argc, char* argv[]) {
 #endif
     if (argc != 3)
         return 2;

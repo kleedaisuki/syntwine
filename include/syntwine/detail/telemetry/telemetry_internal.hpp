@@ -41,7 +41,8 @@ struct Build {
     std::vector<Edge> dependencies;
     std::optional<Metrics> metrics;
 
-    std::size_t weight() const noexcept {
+    std::size_t
+    weight() const noexcept {
         return 1 + spans.size() - !spans.empty() + events.size() + dependencies.size();
     }
 };
@@ -55,8 +56,15 @@ struct QueuedBuild {
     std::shared_ptr<const Build> build;
     unsigned pending_signals = 7;
 
-    const Build* operator->() const noexcept { return build.get(); }
-    const Build& operator*() const noexcept { return *build; }
+    const Build*
+    operator->() const noexcept {
+        return build.get();
+    }
+
+    const Build&
+    operator*() const noexcept {
+        return *build;
+    }
 };
 
 using Batch = std::deque<QueuedBuild>;
@@ -66,7 +74,11 @@ public:
     explicit Sink(std::size_t capacity);
     virtual ~Sink() = default;
 
-    std::size_t capacity() const noexcept { return capacity_; }
+    std::size_t
+    capacity() const noexcept {
+        return capacity_;
+    }
+
     std::size_t dropped_events() const;
     void submit(std::shared_ptr<Build> build);
     void flush();
@@ -74,7 +86,11 @@ public:
     void clear();
 
 protected:
-    virtual bool retains_records() const noexcept { return false; }
+    virtual bool
+    retains_records() const noexcept {
+        return false;
+    }
+
     virtual void export_batch(Batch&) = 0;
 
 private:
@@ -95,15 +111,25 @@ public:
     using Sink::Sink;
 
 private:
-    bool retains_records() const noexcept override { return true; }
-    void export_batch(Batch&) override {}
+    bool
+    retains_records() const noexcept override {
+        return true;
+    }
+
+    void
+    export_batch(Batch&) override {}
 };
 
 class JSONLSink final : public Sink {
 public:
     JSONLSink(std::filesystem::path path, std::size_t capacity)
-        : Sink(capacity), path_(std::move(path)) {}
-    const std::filesystem::path& path() const noexcept { return path_; }
+        : Sink(capacity),
+          path_(std::move(path)) {}
+
+    const std::filesystem::path&
+    path() const noexcept {
+        return path_;
+    }
 
 private:
     void export_batch(Batch& batch) override;
@@ -113,8 +139,13 @@ private:
 class SQLiteSink final : public Sink {
 public:
     SQLiteSink(std::filesystem::path path, std::size_t capacity)
-        : Sink(capacity), path_(std::move(path)) {}
-    const std::filesystem::path& path() const noexcept { return path_; }
+        : Sink(capacity),
+          path_(std::move(path)) {}
+
+    const std::filesystem::path&
+    path() const noexcept {
+        return path_;
+    }
 
 private:
     void export_batch(Batch& batch) override;
@@ -125,9 +156,22 @@ class OTLPSink final : public Sink {
 public:
     using Headers = std::map<std::string, std::string>;
     OTLPSink(std::string endpoint, Headers headers, double timeout, std::size_t capacity);
-    const std::string& endpoint() const noexcept { return endpoint_; }
-    double timeout() const noexcept { return timeout_; }
-    std::uint64_t rejected_records() const noexcept { return rejected_.load(std::memory_order_relaxed); }
+
+    const std::string&
+    endpoint() const noexcept {
+        return endpoint_;
+    }
+
+    double
+    timeout() const noexcept {
+        return timeout_;
+    }
+
+    std::uint64_t
+    rejected_records() const noexcept {
+        return rejected_.load(std::memory_order_relaxed);
+    }
+
     std::optional<std::string> last_export_warning() const;
 
 private:

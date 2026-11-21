@@ -6,7 +6,8 @@
 
 namespace syntwine {
 
-inline std::optional<std::size_t> utf8_characters(std::string_view input) noexcept {
+inline std::optional<std::size_t>
+utf8_characters(std::string_view input) noexcept {
     std::size_t count = 0;
     for (std::size_t i = 0; i < input.size(); ++count) {
         const auto first = static_cast<unsigned char>(input[i++]);
@@ -18,8 +19,10 @@ inline std::optional<std::size_t> utf8_characters(std::string_view input) noexce
         if (input.size() - i < tail)
             return std::nullopt;
         const auto second = static_cast<unsigned char>(input[i]);
-        if ((first == 0xe0 && second < 0xa0) || (first == 0xed && second >= 0xa0) ||
-            (first == 0xf0 && second < 0x90) || (first == 0xf4 && second >= 0x90))
+        if ((first == 0xe0 && second < 0xa0)
+            || (first == 0xed && second >= 0xa0)
+            || (first == 0xf0 && second < 0x90)
+            || (first == 0xf4 && second >= 0x90))
             return std::nullopt;
         for (unsigned j = 0; j < tail; ++j)
             if ((static_cast<unsigned char>(input[i++]) & 0xc0) != 0x80)

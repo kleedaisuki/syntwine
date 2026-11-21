@@ -3,10 +3,10 @@
 #include "syntwine/detail/core/document.hpp"
 #include "syntwine/detail/formats/json.hpp"
 #include "syntwine/detail/formats/markdown.hpp"
-#include "syntwine/detail/telemetry/telemetry.hpp"
 #include "syntwine/detail/formats/text.hpp"
 #include "syntwine/detail/formats/toml.hpp"
 #include "syntwine/detail/formats/xml.hpp"
+#include "syntwine/detail/telemetry/telemetry.hpp"
 
 PYBIND11_MODULE(_syntwine_native, module) {
     using namespace syntwine;

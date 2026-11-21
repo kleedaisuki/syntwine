@@ -1,5 +1,5 @@
-#include "syntwine/detail/telemetry/telemetry_internal.hpp"
 #include "syntwine/detail/platform/utf8.hpp"
+#include "syntwine/detail/telemetry/telemetry_internal.hpp"
 
 #include <pybind11/stl.h>
 #include <pybind11/stl/filesystem.h>
@@ -25,10 +25,12 @@ using Steady = std::chrono::steady_clock;
 using Wall = std::chrono::system_clock;
 using Nanoseconds = std::chrono::nanoseconds;
 
-template<typename Clock>
-std::uint64_t now() noexcept {
+template <typename Clock>
+std::uint64_t
+now() noexcept {
     return static_cast<std::uint64_t>(
-        std::chrono::duration_cast<Nanoseconds>(Clock::now().time_since_epoch()).count());
+        std::chrono::duration_cast<Nanoseconds>(Clock::now().time_since_epoch()).count()
+    );
 }
 
 struct Config {
@@ -43,7 +45,8 @@ struct Config {
 constexpr std::size_t default_max_content_bytes = 65536;
 constexpr std::string_view levels[] = {"build", "stages", "operations"};
 
-Level parse_level(std::string_view name) {
+Level
+parse_level(std::string_view name) {
     for (unsigned i = 0; i < std::size(levels); ++i) {
         if (name == levels[i])
             return static_cast<Level>(i);
@@ -51,14 +54,33 @@ Level parse_level(std::string_view name) {
     throw py::value_error("telemetry level must be build, stages, or operations");
 }
 
-Config make_config(bool enabled, bool traces, bool metrics, bool events,
-                   std::string_view level, double sample_rate, bool include_content,
-                   std::shared_ptr<Sink> sink, std::size_t max_events,
-                   std::size_t max_content_bytes) {
+Config
+make_config(
+    bool enabled,
+    bool traces,
+    bool metrics,
+    bool events,
+    std::string_view level,
+    double sample_rate,
+    bool include_content,
+    std::shared_ptr<Sink> sink,
+    std::size_t max_events,
+    std::size_t max_content_bytes
+) {
     if (!std::isfinite(sample_rate) || sample_rate < 0 || sample_rate > 1)
         throw py::value_error("sample_rate must be between 0 and 1");
-    return Config{enabled, traces, metrics, events, parse_level(level), sample_rate,
-                  include_content, std::move(sink), max_events, max_content_bytes};
+    return Config{
+        enabled,
+        traces,
+        metrics,
+        events,
+        parse_level(level),
+        sample_rate,
+        include_content,
+        std::move(sink),
+        max_events,
+        max_content_bytes
+    };
 }
 
 struct Controls {
@@ -72,11 +94,13 @@ const std::string controls_key = "syntwine.telemetry.controls";
 std::atomic<bool> has_default_or_context = false;
 
 // pybind11 uses interpreter-local internals; no Python handles survive interpreter teardown.
-Controls* controls() {
+Controls*
+controls() {
     return static_cast<Controls*>(py::get_shared_data(controls_key));
 }
 
-std::optional<Config> get_config(py::handle explicit_config) {
+std::optional<Config>
+get_config(py::handle explicit_config) {
     if (explicit_config && !explicit_config.is_none())
         return explicit_config.cast<Config>();
     if (!has_default_or_context.load(std::memory_order_acquire))
@@ -96,13 +120,15 @@ std::optional<Config> get_config(py::handle explicit_config) {
     return ctl->global;
 }
 
-std::mt19937_64 seed_generator() {
+std::mt19937_64
+seed_generator() {
     std::random_device random;
     std::seed_seq seed{random(), random(), random(), random(), random(), random()};
     return std::mt19937_64(seed);
 }
 
-std::mt19937_64& random_generator() {
+std::mt19937_64&
+random_generator() {
     static thread_local std::mt19937_64 engine(seed_generator());
 #ifndef _WIN32
     // A fork copies the PRNG state, but parent and child export to the same collector.
@@ -116,18 +142,21 @@ std::mt19937_64& random_generator() {
     return engine;
 }
 
-std::string make_trace_id(std::mt19937_64& generator) {
+std::string
+make_trace_id(std::mt19937_64& generator) {
     const auto high = generator();
     const auto low = generator();
     return hex_id(high) + hex_id(high || low ? low : 1);
 }
 
-std::string make_build_id(std::mt19937_64& generator) {
+std::string
+make_build_id(std::mt19937_64& generator) {
     static std::atomic<std::uint64_t> counter = 0;
     return hex_id(generator()) + hex_id(counter.fetch_add(1, std::memory_order_relaxed) + 1);
 }
 
-std::string base64(std::string_view bytes) {
+std::string
+base64(std::string_view bytes) {
     constexpr std::string_view alphabet =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string output;
@@ -146,7 +175,8 @@ std::string base64(std::string_view bytes) {
     return output;
 }
 
-std::string metadata(std::string_view value) {
+std::string
+metadata(std::string_view value) {
     if (utf8_characters(value))
         return std::string(value);
     std::string result;
@@ -165,11 +195,20 @@ std::string metadata(std::string_view value) {
 } // namespace
 
 struct Trace::State {
-    State(Config settings, std::mt19937_64& generator, std::uint64_t node_id, std::string_view source_id,
-          std::string_view operation) : config(std::move(settings)),
-          build(std::make_shared<Build>()), steady_start(now<Steady>()),
-          limit(config.sink ? std::min(config.max_events, config.sink->capacity() - 1)
-                            : config.max_events) {
+    State(
+        Config settings,
+        std::mt19937_64& generator,
+        std::uint64_t node_id,
+        std::string_view source_id,
+        std::string_view operation
+    )
+        : config(std::move(settings)),
+          build(std::make_shared<Build>()),
+          steady_start(now<Steady>()),
+          limit(
+              config.sink ? std::min(config.max_events, config.sink->capacity() - 1)
+                          : config.max_events
+          ) {
         build->start = now<Wall>();
         build->trace_id = make_trace_id(generator);
         build->build_id = make_build_id(generator);
@@ -188,19 +227,27 @@ struct Trace::State {
         }
     }
 
-    const Record* active_span() const noexcept {
+    const Record*
+    active_span() const noexcept {
         return active < build->spans.size() ? &build->spans[active] : nullptr;
     }
 
-    bool detail_available() noexcept {
+    bool
+    detail_available() noexcept {
         if (details < limit)
             return true;
         ++build->dropped_events;
         return false;
     }
 
-    Record make_record(std::string_view name, std::uint64_t timestamp, std::uint64_t node_id,
-                       std::string_view source_id, std::string_view operation) const {
+    Record
+    make_record(
+        std::string_view name,
+        std::uint64_t timestamp,
+        std::uint64_t node_id,
+        std::string_view source_id,
+        std::string_view operation
+    ) const {
         const auto* parent = active_span();
         Record record;
         record.name = metadata(name);
@@ -213,12 +260,19 @@ struct Trace::State {
         return record;
     }
 
-    Record* add_event(std::string_view name, std::uint64_t node_id, std::string_view source_id,
-                      std::string_view operation) noexcept {
+    Record*
+    add_event(
+        std::string_view name,
+        std::uint64_t node_id,
+        std::string_view source_id,
+        std::string_view operation
+    ) noexcept {
         if (!config.events || !detail_available())
             return nullptr;
         try {
-            build->events.push_back(make_record(name, now<Steady>(), node_id, source_id, operation));
+            build->events.push_back(
+                make_record(name, now<Steady>(), node_id, source_id, operation)
+            );
             ++details;
             ++next_id;
             return &build->events.back();
@@ -236,24 +290,39 @@ struct Trace::State {
     bool finished = false;
 };
 
-Trace::Trace(std::unique_ptr<State> state) : state_(std::move(state)) {}
-Trace::~Trace() { finish("OperationError"); }
+Trace::Trace(std::unique_ptr<State> state)
+    : state_(std::move(state)) {}
 
-const std::string& Trace::id() const noexcept { return state_->build->trace_id; }
-
-bool Trace::records_dependencies() const noexcept {
-    const auto& state = *state_;
-    return !state.finished && state.config.level != Level::build &&
-           (state.config.traces || state.config.events);
+Trace::~Trace() {
+    finish("OperationError");
 }
 
-void Trace::event(std::string_view name, std::uint64_t node_id, std::string_view source_id,
-                  std::string_view operation) noexcept {
+const std::string&
+Trace::id() const noexcept {
+    return state_->build->trace_id;
+}
+
+bool
+Trace::records_dependencies() const noexcept {
+    const auto& state = *state_;
+    return !state.finished
+           && state.config.level != Level::build
+           && (state.config.traces || state.config.events);
+}
+
+void
+Trace::event(
+    std::string_view name,
+    std::uint64_t node_id,
+    std::string_view source_id,
+    std::string_view operation
+) noexcept {
     if (!state_->finished)
         state_->add_event(name, node_id, source_id, operation);
 }
 
-void Trace::dependency(std::uint64_t parent, std::uint64_t child, bool discovered) noexcept {
+void
+Trace::dependency(std::uint64_t parent, std::uint64_t child, bool discovered) noexcept {
     auto& state = *state_;
     if (!records_dependencies())
         return;
@@ -273,7 +342,8 @@ void Trace::dependency(std::uint64_t parent, std::uint64_t child, bool discovere
     }
 }
 
-void Trace::finish(std::string_view error_code, std::optional<std::string_view> content) noexcept {
+void
+Trace::finish(std::string_view error_code, std::optional<std::string_view> content) noexcept {
     auto& state = *state_;
     if (state.finished)
         return;
@@ -308,12 +378,19 @@ void Trace::finish(std::string_view error_code, std::optional<std::string_view> 
     }
 }
 
-py::dict Trace::view() const {
+py::dict
+Trace::view() const {
     return build_python(*state_->build);
 }
 
-void Span::begin(std::string_view name, Level level, std::uint64_t node_id,
-                 std::string_view source_id, std::string_view operation) noexcept {
+void
+Span::begin(
+    std::string_view name,
+    Level level,
+    std::uint64_t node_id,
+    std::string_view source_id,
+    std::string_view operation
+) noexcept {
     auto& state = *trace_->state_;
     if (state.finished) {
         trace_ = nullptr;
@@ -327,8 +404,12 @@ void Span::begin(std::string_view name, Level level, std::uint64_t node_id,
             metric_ = Metric::python;
         else if (name == "budget.tokens")
             metric_ = Metric::token;
-        else if (name == "transform" || name == "squish" || name.starts_with("parse.") ||
-                 name == "custom.native")
+        else if (
+            name == "transform"
+            || name == "squish"
+            || name.starts_with("parse.")
+            || name == "custom.native"
+        )
             metric_ = Metric::native;
     }
     if (state.config.traces && level <= state.config.level && state.detail_available()) {
@@ -346,11 +427,13 @@ void Span::begin(std::string_view name, Level level, std::uint64_t node_id,
             ++state.build->dropped_events;
         }
     }
-    if (!start_ && (metric_ == Metric::native || metric_ == Metric::python || metric_ == Metric::token))
+    if (!start_
+        && (metric_ == Metric::native || metric_ == Metric::python || metric_ == Metric::token))
         start_ = now<Steady>();
 }
 
-void Span::end() noexcept {
+void
+Span::end() noexcept {
     const auto duration = start_ ? now<Steady>() - start_ : 0;
     auto& state = *trace_->state_;
     if (record_ != no_record) {
@@ -381,38 +464,43 @@ void Span::end() noexcept {
     }
 }
 
-void Span::fail(std::string_view code) noexcept {
+void
+Span::fail(std::string_view code) noexcept {
     if (record_ == no_record)
         return;
     try {
         trace_->state_->build->spans[record_].error_code = metadata(code);
-    } catch (...) {
-    }
+    } catch (...) {}
 }
 
-void Span::input_bytes(std::optional<std::size_t> value) noexcept {
+void
+Span::input_bytes(std::optional<std::size_t> value) noexcept {
     if (record_ != no_record)
         trace_->state_->build->spans[record_].input = value;
 }
 
-void Span::output_bytes(std::optional<std::size_t> value) noexcept {
+void
+Span::output_bytes(std::optional<std::size_t> value) noexcept {
     if (output_stage_)
         trace_->state_->build->output_bytes = value;
     if (record_ != no_record)
         trace_->state_->build->spans[record_].output = value;
 }
 
-void Span::characters(std::optional<std::size_t> value) noexcept {
+void
+Span::characters(std::optional<std::size_t> value) noexcept {
     if (record_ != no_record)
         trace_->state_->build->spans[record_].characters = value;
 }
 
-void Span::tokens(std::optional<std::size_t> value) noexcept {
+void
+Span::tokens(std::optional<std::size_t> value) noexcept {
     if (record_ != no_record)
         trace_->state_->build->spans[record_].tokens = value;
 }
 
-void Span::cache_hit(bool value) noexcept {
+void
+Span::cache_hit(bool value) noexcept {
     if (value && !cached_ && trace_ && trace_->state_->build->metrics)
         ++trace_->state_->build->metrics->cache_hits;
     cached_ = value;
@@ -420,38 +508,50 @@ void Span::cache_hit(bool value) noexcept {
         trace_->state_->build->spans[record_].cache_hit = value;
 }
 
-void Span::discovered_dependencies(std::size_t value) noexcept {
+void
+Span::discovered_dependencies(std::size_t value) noexcept {
     if (record_ != no_record)
         trace_->state_->build->spans[record_].discovered_dependencies = value;
 }
 
-std::unique_ptr<Trace> start(py::handle explicit_config, std::uint64_t node_id,
-                             std::string_view source_id, std::string_view operation) {
+std::unique_ptr<Trace>
+start(
+    py::handle explicit_config,
+    std::uint64_t node_id,
+    std::string_view source_id,
+    std::string_view operation
+) {
     auto config = get_config(explicit_config);
     if (!config || !config->enabled || config->sample_rate == 0)
         return {};
     try {
         auto& generator = random_generator();
-        if (config->sample_rate < 1 &&
-            std::generate_canonical<double, 53>(generator) >= config->sample_rate)
+        if (config->sample_rate < 1
+            && std::generate_canonical<double, 53>(generator) >= config->sample_rate)
             return {};
         return std::make_unique<Trace>(std::make_unique<Trace::State>(
-            std::move(*config), generator, node_id, source_id, operation));
+            std::move(*config),
+            generator,
+            node_id,
+            source_id,
+            operation
+        ));
     } catch (...) {
         return {};
     }
 }
 
-void bind(py::module_& module) {
+void
+bind(py::module_& module) {
     auto mod = module.def_submodule("_telemetry");
-    auto context = py::reinterpret_steal<py::object>(PyContextVar_New("syntwine.telemetry", Py_None));
+    auto context =
+        py::reinterpret_steal<py::object>(PyContextVar_New("syntwine.telemetry", Py_None));
     if (!context)
         throw py::error_already_set();
     auto state = std::make_unique<Controls>();
     state->context = std::move(context);
-    auto capsule = py::capsule(state.get(), [](void* pointer) {
-        delete static_cast<Controls*>(pointer);
-    });
+    auto capsule =
+        py::capsule(state.get(), [](void* pointer) { delete static_cast<Controls*>(pointer); });
     auto* ctl = state.release();
     mod.attr("_state") = std::move(capsule);
     py::set_shared_data(controls_key, ctl);
@@ -472,54 +572,85 @@ void bind(py::module_& module) {
         .def("snapshot", snapshot)
         .def("clear", &MemorySink::clear);
     py::class_<JSONLSink, Sink, std::shared_ptr<JSONLSink>>(mod, "JSONLSink")
-        .def(py::init<std::filesystem::path, std::size_t>(), py::arg("path"),
-             py::arg("capacity") = default_capacity)
+        .def(
+            py::init<std::filesystem::path, std::size_t>(),
+            py::arg("path"),
+            py::arg("capacity") = default_capacity
+        )
         .def_property_readonly("path", &JSONLSink::path);
     py::class_<SQLiteSink, Sink, std::shared_ptr<SQLiteSink>>(mod, "SQLiteSink")
-        .def(py::init<std::filesystem::path, std::size_t>(), py::arg("path"),
-             py::arg("capacity") = default_capacity)
+        .def(
+            py::init<std::filesystem::path, std::size_t>(),
+            py::arg("path"),
+            py::arg("capacity") = default_capacity
+        )
         .def_property_readonly("path", &SQLiteSink::path);
     py::class_<OTLPSink, Sink, std::shared_ptr<OTLPSink>>(mod, "OTLPSink")
-        .def(py::init([](std::string endpoint, std::optional<OTLPSink::Headers> headers,
-                         double timeout, std::size_t capacity) {
-            return std::make_shared<OTLPSink>(std::move(endpoint),
-                headers ? std::move(*headers) : OTLPSink::Headers{}, timeout, capacity);
-        }), py::arg("endpoint"), py::arg("headers") = py::none(), py::arg("timeout") = 5.0,
-            py::arg("capacity") = default_capacity)
+        .def(
+            py::init([](std::string endpoint,
+                        std::optional<OTLPSink::Headers> headers,
+                        double timeout,
+                        std::size_t capacity) {
+                return std::make_shared<OTLPSink>(
+                    std::move(endpoint),
+                    headers ? std::move(*headers) : OTLPSink::Headers{},
+                    timeout,
+                    capacity
+                );
+            }),
+            py::arg("endpoint"),
+            py::arg("headers") = py::none(),
+            py::arg("timeout") = 5.0,
+            py::arg("capacity") = default_capacity
+        )
         .def_property_readonly("endpoint", &OTLPSink::endpoint)
         .def_property_readonly("timeout", &OTLPSink::timeout)
         .def_property_readonly("rejected_records", &OTLPSink::rejected_records)
         .def_property_readonly("last_export_warning", &OTLPSink::last_export_warning);
     py::class_<Config>(mod, "TelemetryConfig")
-        .def(py::init(&make_config), py::kw_only(), py::arg("enabled") = false,
-             py::arg("traces") = true, py::arg("metrics") = true, py::arg("events") = true,
-             py::arg("level") = "operations", py::arg("sample_rate") = 1.0,
-             py::arg("include_content") = false, py::arg("sink") = nullptr,
-             py::arg("max_events") = default_max_events,
-             py::arg("max_content_bytes") = default_max_content_bytes)
+        .def(
+            py::init(&make_config),
+            py::kw_only(),
+            py::arg("enabled") = false,
+            py::arg("traces") = true,
+            py::arg("metrics") = true,
+            py::arg("events") = true,
+            py::arg("level") = "operations",
+            py::arg("sample_rate") = 1.0,
+            py::arg("include_content") = false,
+            py::arg("sink") = nullptr,
+            py::arg("max_events") = default_max_events,
+            py::arg("max_content_bytes") = default_max_content_bytes
+        )
         .def_readonly("enabled", &Config::enabled)
         .def_readonly("traces", &Config::traces)
         .def_readonly("metrics", &Config::metrics)
         .def_readonly("events", &Config::events)
-        .def_property_readonly("level", [](const Config& config) {
-            return levels[static_cast<unsigned>(config.level)];
-        })
+        .def_property_readonly(
+            "level",
+            [](const Config& config) { return levels[static_cast<unsigned>(config.level)]; }
+        )
         .def_readonly("sample_rate", &Config::sample_rate)
         .def_readonly("include_content", &Config::include_content)
         .def_readonly("sink", &Config::sink)
         .def_readonly("max_events", &Config::max_events)
         .def_readonly("max_content_bytes", &Config::max_content_bytes);
-    mod.def("configure", [](const Config& config) {
-        auto* ctl = controls();
-        const std::lock_guard guard(ctl->global_mutex);
-        ctl->global = config.enabled ? std::optional(config) : std::nullopt;
-        if (config.enabled)
-            has_default_or_context.store(true, std::memory_order_release);
-    }, py::arg("config"));
+    mod.def(
+        "configure",
+        [](const Config& config) {
+            auto* ctl = controls();
+            const std::lock_guard guard(ctl->global_mutex);
+            ctl->global = config.enabled ? std::optional(config) : std::nullopt;
+            if (config.enabled)
+                has_default_or_context.store(true, std::memory_order_release);
+        },
+        py::arg("config")
+    );
     mod.def("_push_config", [](const Config& config) {
         auto* ctl = controls();
         auto value = py::cast(config);
-        auto token = py::reinterpret_steal<py::object>(PyContextVar_Set(ctl->context.ptr(), value.ptr()));
+        auto token =
+            py::reinterpret_steal<py::object>(PyContextVar_Set(ctl->context.ptr(), value.ptr()));
         if (!token)
             throw py::error_already_set();
         ctl->has_context.store(true, std::memory_order_release);

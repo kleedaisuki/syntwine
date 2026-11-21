@@ -14,24 +14,30 @@ public:
     }
 
     DocumentParts(const DocumentParts& other)
-        : roots_(other.roots_), size_(other.size_) {
+        : roots_(other.roots_),
+          size_(other.size_) {
         tail_.reserve(chunk_size);
         tail_.assign(other.tail_.begin(), other.tail_.end());
     }
 
     DocumentParts(DocumentParts&&) noexcept = default;
 
-    std::size_t size() const noexcept { return size_; }
+    std::size_t
+    size() const noexcept {
+        return size_;
+    }
 
-    void push(NodePtr node) {
+    void
+    push(NodePtr node) {
         if (tail_.size() == chunk_size)
             seal_tail();
         tail_.push_back(std::move(node));
         ++size_;
     }
 
-    template<class Fn>
-    void visit(Fn&& fn) const {
+    template <class Fn>
+    void
+    visit(Fn&& fn) const {
         for (auto tree = roots_.rbegin(); tree != roots_.rend(); ++tree)
             if (*tree)
                 visit_chunk(**tree, fn);
@@ -39,12 +45,14 @@ public:
             fn(node);
     }
 
-    void append_to(std::vector<NodePtr>& nodes) const {
+    void
+    append_to(std::vector<NodePtr>& nodes) const {
         nodes.reserve(nodes.size() + size_);
         visit([&](const NodePtr& node) { nodes.push_back(node); });
     }
 
-    std::vector<NodePtr> materialize() const {
+    std::vector<NodePtr>
+    materialize() const {
         std::vector<NodePtr> nodes;
         append_to(nodes);
         return nodes;
@@ -54,12 +62,19 @@ private:
     using Leaf = std::vector<NodePtr>;
     struct Chunk;
     using Tree = std::shared_ptr<const Chunk>;
-    struct Branch { Tree left, right; };
-    struct Chunk { std::variant<Leaf, Branch> data; };
+
+    struct Branch {
+        Tree left, right;
+    };
+
+    struct Chunk {
+        std::variant<Leaf, Branch> data;
+    };
 
     static constexpr std::size_t chunk_size = 32;
 
-    void seal_tail() {
+    void
+    seal_tail() {
         auto tree = std::make_shared<const Chunk>(Chunk{std::move(tail_)});
         tail_.clear();
         tail_.reserve(chunk_size);
@@ -75,8 +90,9 @@ private:
         roots_.push_back(std::move(tree));
     }
 
-    template<class Fn>
-    static void visit_chunk(const Chunk& chunk, Fn& fn) {
+    template <class Fn>
+    static void
+    visit_chunk(const Chunk& chunk, Fn& fn) {
         if (const auto* split = std::get_if<Branch>(&chunk.data)) {
             visit_chunk(*split->left, fn);
             visit_chunk(*split->right, fn);

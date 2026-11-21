@@ -8,10 +8,12 @@ namespace syntwine {
 
 using JsonTree = jsoncons::ojson;
 
-inline bool json_string(const JsonTree& value) noexcept {
+inline bool
+json_string(const JsonTree& value) noexcept {
     const auto tag = value.tag();
     // The parser records ordinary strings that contain no escapes with a separate storage tag.
-    return value.is_string() && (tag == jsoncons::semantic_tag::none || tag == jsoncons::semantic_tag::noesc);
+    return value.is_string()
+           && (tag == jsoncons::semantic_tag::none || tag == jsoncons::semantic_tag::noesc);
 }
 
 Value make_json(JsonTree value, std::optional<std::string> source = std::nullopt);

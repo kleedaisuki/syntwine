@@ -4,7 +4,9 @@
 
 namespace syntwine {
 
-struct Document : Source { using Source::Source; };
+struct Document : Source {
+    using Source::Source;
+};
 
 void bind_document(py::module_& module);
 

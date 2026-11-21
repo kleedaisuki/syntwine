@@ -31,30 +31,39 @@ using telemetry::Level;
 using telemetry::Span;
 
 Error::Error(ErrorCode code, std::string message, std::string location)
-    : std::runtime_error(std::move(message)), code(code), location(std::move(location)) {}
+    : std::runtime_error(std::move(message)),
+      code(code),
+      location(std::move(location)) {}
 
-std::string_view kind_name(Kind kind)
-{
-    static constexpr std::array names{
-        "source", "literal", "text", "md", "toml", "json", "xml", "document", "extension"
-    };
+std::string_view
+kind_name(Kind kind) {
+    static constexpr std::array
+        names{"source", "literal", "text", "md", "toml", "json", "xml", "document", "extension"};
     return names[static_cast<std::size_t>(kind)];
 }
 
-std::string_view kind_name_for_error(ErrorCode code)
-{
+std::string_view
+kind_name_for_error(ErrorCode code) {
     static constexpr std::array names{
-        "SourceError", "DecodeError", "EncodingError", "ParseError", "TypeMismatch",
-        "CycleError", "OperationError", "OperationConflict", "BudgetExceeded",
-        "SerializationError", "EvaluationLimit"
+        "SourceError",
+        "DecodeError",
+        "EncodingError",
+        "ParseError",
+        "TypeMismatch",
+        "CycleError",
+        "OperationError",
+        "OperationConflict",
+        "BudgetExceeded",
+        "SerializationError",
+        "EvaluationLimit"
     };
     return names[static_cast<std::size_t>(code)];
 }
 
 namespace {
 
-void delete_node(const Node* node) noexcept
-{
+void
+delete_node(const Node* node) noexcept {
     // Releasing the last root of an arbitrarily deep graph must not recurse through its edges.
     static thread_local const Node* pending = nullptr;
     static thread_local bool draining = false;
@@ -74,8 +83,8 @@ void delete_node(const Node* node) noexcept
 struct StackRange {
     std::uintptr_t low = 0, high = 0;
 
-    bool contains(std::uintptr_t address) const noexcept
-    {
+    bool
+    contains(std::uintptr_t address) const noexcept {
         return address >= low && address < high;
     }
 };
@@ -83,13 +92,14 @@ struct StackRange {
 // The live stack address is needed on Windows to resolve the reservation and
 // to detect switches between stacks on the same native thread.
 #if defined(_WIN32)
-StackRange stack_range(std::uintptr_t current) noexcept
-{
+StackRange
+stack_range(std::uintptr_t current) noexcept {
     ULONG_PTR low{}, high{};
     GetCurrentThreadStackLimits(&low, &high);
     MEMORY_BASIC_INFORMATION region{};
-    if (VirtualQuery(reinterpret_cast<const void*>(current), &region, sizeof region) &&
-        region.State == MEM_COMMIT && region.Type == MEM_PRIVATE) {
+    if (VirtualQuery(reinterpret_cast<const void*>(current), &region, sizeof region)
+        && region.State == MEM_COMMIT
+        && region.Type == MEM_PRIVATE) {
         low = reinterpret_cast<ULONG_PTR>(region.AllocationBase);
         if (high <= current)
             high = reinterpret_cast<ULONG_PTR>(region.BaseAddress) + region.RegionSize;
@@ -99,8 +109,8 @@ StackRange stack_range(std::uintptr_t current) noexcept
     return {low + guarantee, high};
 }
 
-bool stack_headroom() noexcept
-{
+bool
+stack_headroom() noexcept {
 #if defined(_MSC_VER)
     auto current = reinterpret_cast<std::uintptr_t>(_AddressOfReturnAddress());
 #else
@@ -112,14 +122,17 @@ bool stack_headroom() noexcept
     if (!range.contains(current))
         return false;
     // Reserve room for the MSVC exception dispatcher, pybind11 and callback frames.
-    auto reserve = std::clamp((range.high - range.low) / 3,
-                              std::uintptr_t{64 * 1024}, std::uintptr_t{512 * 1024});
+    auto reserve = std::clamp(
+        (range.high - range.low) / 3,
+        std::uintptr_t{64 * 1024},
+        std::uintptr_t{512 * 1024}
+    );
     return current - range.low >= reserve;
 }
 
 #else
-StackRange stack_range() noexcept
-{
+StackRange
+stack_range() noexcept {
 #if defined(__APPLE__)
     auto thread = pthread_self();
     auto high = reinterpret_cast<std::uintptr_t>(pthread_get_stackaddr_np(thread));
@@ -140,22 +153,25 @@ StackRange stack_range() noexcept
 #endif
 }
 
-bool stack_headroom() noexcept
-{
+bool
+stack_headroom() noexcept {
     static thread_local const auto range = stack_range();
     const char marker = 0;
     auto current = reinterpret_cast<std::uintptr_t>(&marker);
     if (!range.contains(current))
-        return true;  // CPython's recursion API still checks platform-specific or alternate stacks.
+        return true; // CPython's recursion API still checks platform-specific or alternate stacks.
     // C++ unwinding and callback wrappers can consume more than CPython's own reserve.
-    auto reserve = std::clamp((range.high - range.low) / 4,
-                              std::uintptr_t{16 * 1024}, std::uintptr_t{128 * 1024});
+    auto reserve = std::clamp(
+        (range.high - range.low) / 4,
+        std::uintptr_t{16 * 1024},
+        std::uintptr_t{128 * 1024}
+    );
     return current - range.low >= reserve;
 }
 #endif
 
-std::size_t evaluation_depth_limit(std::size_t configured) noexcept
-{
+std::size_t
+evaluation_depth_limit(std::size_t configured) noexcept {
 #if defined(_WIN32)
     // MSVC's exception dispatcher must also unwind the suspended callbacks.
     // Free bytes alone do not bound that work on a deeply nested graph.
@@ -166,8 +182,7 @@ std::size_t evaluation_depth_limit(std::size_t configured) noexcept
 }
 
 struct RecursionGuard {
-    explicit RecursionGuard(const char* where)
-    {
+    explicit RecursionGuard(const char* where) {
         const auto has_room = stack_headroom();
         if (has_room && !Py_EnterRecursiveCall(where))
             return;
@@ -177,28 +192,54 @@ struct RecursionGuard {
         error.cause = py::reinterpret_steal<py::object>(PyErr_GetRaisedException());
         throw error;
     }
-    ~RecursionGuard() { Py_LeaveRecursiveCall(); }
+
+    ~RecursionGuard() {
+        Py_LeaveRecursiveCall();
+    }
+
     RecursionGuard(const RecursionGuard&) = delete;
     RecursionGuard& operator=(const RecursionGuard&) = delete;
 };
 
 } // namespace
 
-NodePtr make_node(std::string name, Kind kind, std::vector<NodePtr> dependencies,
-                  Compute compute, bool pure, std::shared_ptr<const NodeMetadata> metadata,
-                  std::string source_id, std::string span)
-{
+NodePtr
+make_node(
+    std::string name,
+    Kind kind,
+    std::vector<NodePtr> dependencies,
+    Compute compute,
+    bool pure,
+    std::shared_ptr<const NodeMetadata> metadata,
+    std::string source_id,
+    std::string span
+) {
     static std::atomic<std::uint64_t> next_id{1};
     auto id = next_id.fetch_add(1, std::memory_order_relaxed);
     if (source_id.empty())
         source_id = "node:" + std::to_string(id);
-    if (span.empty() && (name.starts_with("literal.") || name.starts_with("text.") ||
-            name.starts_with("md.") || name.starts_with("json.") ||
-            name.starts_with("toml.") || name.starts_with("xml.")))
+    if (span.empty()
+        && (name.starts_with("literal.")
+            || name.starts_with("text.")
+            || name.starts_with("md.")
+            || name.starts_with("json.")
+            || name.starts_with("toml.")
+            || name.starts_with("xml.")))
         span = "transform";
-    return NodePtr(new Node{id, std::move(name), kind, std::move(dependencies),
-        std::move(compute), pure, std::move(metadata), std::move(source_id), std::move(span)},
-        delete_node);
+    return NodePtr(
+        new Node{
+            id,
+            std::move(name),
+            kind,
+            std::move(dependencies),
+            std::move(compute),
+            pure,
+            std::move(metadata),
+            std::move(source_id),
+            std::move(span)
+        },
+        delete_node
+    );
 }
 
 namespace {
@@ -208,20 +249,23 @@ struct Format {
     Wrapper wrap;
 };
 
-Format& format(Kind kind)
-{
+Format&
+format(Kind kind) {
     static std::array<Format, static_cast<std::size_t>(Kind::extension) + 1> formats;
     return formats[static_cast<std::size_t>(kind)];
 }
 
-bool is_container(py::handle object)
-{
+bool
+is_container(py::handle object) {
     return PyDict_Check(object.ptr()) || PyList_Check(object.ptr()) || PyTuple_Check(object.ptr());
 }
 
-void find_dependencies(py::handle object, std::vector<NodePtr>& result,
-                       std::unordered_set<PyObject*>& containers)
-{
+void
+find_dependencies(
+    py::handle object,
+    std::vector<NodePtr>& result,
+    std::unordered_set<PyObject*>& containers
+) {
     if (py::isinstance<Source>(object)) {
         result.push_back(py::cast<const Source&>(object).node);
         return;
@@ -238,9 +282,9 @@ void find_dependencies(py::handle object, std::vector<NodePtr>& result,
         find_dependencies(item, result, containers);
 }
 
-template<class Leaf>
-py::object copy_tree(py::handle input, Leaf& leaf, std::unordered_set<PyObject*>& active)
-{
+template <class Leaf>
+py::object
+copy_tree(py::handle input, Leaf& leaf, std::unordered_set<PyObject*>& active) {
     if (!is_container(input))
         return leaf(input);
     RecursionGuard guard(" while resolving Syntwine operands");
@@ -273,35 +317,35 @@ py::object copy_tree(py::handle input, Leaf& leaf, std::unordered_set<PyObject*>
 
 } // namespace
 
-std::vector<NodePtr> dependencies(py::handle operand)
-{
+std::vector<NodePtr>
+dependencies(py::handle operand) {
     std::vector<NodePtr> result;
     std::unordered_set<PyObject*> containers;
     find_dependencies(operand, result, containers);
     return result;
 }
 
-py::object snapshot(py::handle operand)
-{
+py::object
+snapshot(py::handle operand) {
     std::unordered_set<PyObject*> active;
     auto leaf = [](py::handle value) { return py::reinterpret_borrow<py::object>(value); };
     return copy_tree(operand, leaf, active);
 }
 
-void register_format(Kind kind, ParseFunction parse_fn, FromPythonFunction convert_fn)
-{
+void
+register_format(Kind kind, ParseFunction parse_fn, FromPythonFunction convert_fn) {
     auto& item = format(kind);
     item.parse = std::move(parse_fn);
     item.from_python = std::move(convert_fn);
 }
 
-void register_wrapper(Kind kind, Wrapper wrap)
-{
+void
+register_wrapper(Kind kind, Wrapper wrap) {
     format(kind).wrap = std::move(wrap);
 }
 
-Value parse(Kind kind, std::string_view data)
-{
+Value
+parse(Kind kind, std::string_view data) {
     if (kind == Kind::literal || kind == Kind::document)
         return Bytes(std::string(data));
     if (kind == Kind::text) {
@@ -314,9 +358,10 @@ Value parse(Kind kind, std::string_view data)
     throw Error(ErrorCode::type, "no parser registered for " + std::string(kind_name(kind)));
 }
 
-Value from_python(py::handle object, Kind kind)
-{
-    if (PyBytes_Check(object.ptr()) && (kind == Kind::any || kind == Kind::literal || kind == Kind::document))
+Value
+from_python(py::handle object, Kind kind) {
+    if (PyBytes_Check(object.ptr())
+        && (kind == Kind::any || kind == Kind::literal || kind == Kind::document))
         return Bytes(py::cast<std::string>(object));
     if (PyUnicode_Check(object.ptr()) && (kind == Kind::any || kind == Kind::text)) {
         Py_ssize_t length{};
@@ -339,25 +384,28 @@ Value from_python(py::handle object, Kind kind)
     throw Error(ErrorCode::type, "expected " + std::string(kind_name(kind)) + " value");
 }
 
-py::object to_python(const Value& value)
-{
-    return std::visit([](const auto& item) -> py::object {
-        using T = std::decay_t<decltype(item)>;
-        if constexpr (std::is_same_v<T, std::monostate>)
-            return py::none();
-        else if constexpr (std::is_same_v<T, Bytes>)
-            return py::bytes(item.data());
-        else if constexpr (std::is_same_v<T, Utf8>)
-            return py::str(item.data());
-        else if constexpr (std::is_same_v<T, std::shared_ptr<const FormatValue>>)
-            return item->to_python();
-        else
-            return item;
-    }, value);
+py::object
+to_python(const Value& value) {
+    return std::visit(
+        [](const auto& item) -> py::object {
+            using T = std::decay_t<decltype(item)>;
+            if constexpr (std::is_same_v<T, std::monostate>)
+                return py::none();
+            else if constexpr (std::is_same_v<T, Bytes>)
+                return py::bytes(item.data());
+            else if constexpr (std::is_same_v<T, Utf8>)
+                return py::str(item.data());
+            else if constexpr (std::is_same_v<T, std::shared_ptr<const FormatValue>>)
+                return item->to_python();
+            else
+                return item;
+        },
+        value
+    );
 }
 
-std::string serialize(const Value& value)
-{
+std::string
+serialize(const Value& value) {
     if (const auto* bin = std::get_if<Bytes>(&value))
         return bin->data();
     if (const auto* text = std::get_if<Utf8>(&value))
@@ -371,8 +419,8 @@ std::string serialize(const Value& value)
     }
 }
 
-std::optional<std::size_t> size_bytes(const Value& value)
-{
+std::optional<std::size_t>
+size_bytes(const Value& value) {
     if (const auto* bin = std::get_if<Bytes>(&value))
         return bin->data().size();
     if (const auto* text = std::get_if<Utf8>(&value))
@@ -380,34 +428,48 @@ std::optional<std::size_t> size_bytes(const Value& value)
     return std::nullopt;
 }
 
-py::object wrap_source(NodePtr node)
-{
+py::object
+wrap_source(NodePtr node) {
     if (const auto& fn = format(node->kind).wrap)
         return fn(std::move(node));
     switch (node->kind) {
-    case Kind::literal: return py::cast(Literal(std::move(node)));
-    case Kind::text: return py::cast(Text(std::move(node)));
-    case Kind::md: return py::cast(MD(std::move(node)));
-    case Kind::toml: return py::cast(TOML(std::move(node)));
-    case Kind::json: return py::cast(JSON(std::move(node)));
-    case Kind::xml: return py::cast(XML(std::move(node)));
-    default: return py::cast(Source(std::move(node)));
+    case Kind::literal:
+        return py::cast(Literal(std::move(node)));
+    case Kind::text:
+        return py::cast(Text(std::move(node)));
+    case Kind::md:
+        return py::cast(MD(std::move(node)));
+    case Kind::toml:
+        return py::cast(TOML(std::move(node)));
+    case Kind::json:
+        return py::cast(JSON(std::move(node)));
+    case Kind::xml:
+        return py::cast(XML(std::move(node)));
+    default:
+        return py::cast(Source(std::move(node)));
     }
 }
 
-Session::Session(BuildOptions options, py::object context, py::object tokenizer, telemetry::Trace* trace)
-    : options_(options), context_(std::move(context)), tokenizer_(std::move(tokenizer)), trace_(trace)
-{}
+Session::Session(
+    BuildOptions options,
+    py::object context,
+    py::object tokenizer,
+    telemetry::Trace* trace
+)
+    : options_(options),
+      context_(std::move(context)),
+      tokenizer_(std::move(tokenizer)),
+      trace_(trace) {}
 
-void Session::record_source(std::string_view source_id)
-{
+void
+Session::record_source(std::string_view source_id) {
     auto [it, inserted] = source_ids_.emplace(source_id);
     if (inserted)
         sources_.push_back(*it);
 }
 
-void Session::annotate(Error& error, const NodePtr& extra) const
-{
+void
+Session::annotate(Error& error, const NodePtr& extra) const {
     if (trace_ && error.trace_id.empty())
         error.trace_id = trace_->id();
     if (error.dependency_path.empty()) {
@@ -426,16 +488,17 @@ void Session::annotate(Error& error, const NodePtr& extra) const
     }
 }
 
-void Session::trace_dependency(const NodePtr& dependency)
-{
+void
+Session::trace_dependency(const NodePtr& dependency) {
     if (stack_.empty() || !trace_->records_dependencies())
         return;
     auto& parent = stack_.back();
     const auto& declared = parent.node->dependencies;
     bool discovered;
     if (!parent.node->metadata && declared.size() <= 32) {
-        discovered = std::ranges::none_of(declared,
-            [&dependency](const NodePtr& node) { return node->id == dependency->id; });
+        discovered = std::ranges::none_of(declared, [&dependency](const NodePtr& node) {
+            return node->id == dependency->id;
+        });
     } else {
         if (!parent.declared) {
             parent.declared = std::make_unique<std::unordered_set<std::uint64_t>>();
@@ -454,8 +517,8 @@ void Session::trace_dependency(const NodePtr& dependency)
     trace_->dependency(parent.node->id, dependency->id, discovered);
 }
 
-Value Session::eval(const NodePtr& node)
-{
+Value
+Session::eval(const NodePtr& node) {
     if (!root_)
         root_ = node.get();
     if (trace_)
@@ -475,7 +538,14 @@ Value Session::eval(const NodePtr& node)
         std::rethrow_exception(record.failure);
     if (record.state == State::done) {
         if (trace_) {
-            Span span(trace_, "node.evaluate", Level::operations, node->id, node->source_id, node->name);
+            Span span(
+                trace_,
+                "node.evaluate",
+                Level::operations,
+                node->id,
+                node->source_id,
+                node->name
+            );
             span.cache_hit(true);
             span.output_bytes(size_bytes(record.value));
         }
@@ -509,15 +579,18 @@ Value Session::eval(const NodePtr& node)
 }
 
 namespace {
-template<class F>
+template <class F>
 struct EvaluationFrame {
     F pop;
-    ~EvaluationFrame() { pop(); }
-};
-}
 
-Value Session::evaluate(const NodePtr& node, Record& record)
-{
+    ~EvaluationFrame() {
+        pop();
+    }
+};
+} // namespace
+
+Value
+Session::evaluate(const NodePtr& node, Record& record) {
     stack_.push_back({node, node->pure, {}});
     record.state = State::visiting;
     EvaluationFrame frame{[&] {
@@ -534,7 +607,14 @@ Value Session::evaluate(const NodePtr& node, Record& record)
         if (node->span.empty()) {
             result = node->compute(*this);
         } else {
-            Span detail(trace_, node->span, Level::operations, node->id, node->source_id, node->name);
+            Span detail(
+                trace_,
+                node->span,
+                Level::operations,
+                node->id,
+                node->source_id,
+                node->name
+            );
             try {
                 result = node->compute(*this);
                 if (trace_)
@@ -574,8 +654,8 @@ Value Session::evaluate(const NodePtr& node, Record& record)
     }
 }
 
-Value Session::resolve(py::handle input)
-{
+Value
+Session::resolve(py::handle input) {
     if (py::isinstance<Source>(input))
         return eval(py::cast<const Source&>(input).node);
     if (!is_container(input))
@@ -589,12 +669,22 @@ Value Session::resolve(py::handle input)
     return copy_tree(input, leaf, active);
 }
 
-py::object Session::call(py::handle fn, const py::tuple& args, const py::dict& kwargs,
-                         std::string_view operation)
-{
+py::object
+Session::call(
+    py::handle fn,
+    const py::tuple& args,
+    const py::dict& kwargs,
+    std::string_view operation
+) {
     const auto* node = active() ? active() : root_;
-    Span span(trace_, "custom.python", Level::operations, node ? node->id : 0,
-              node ? node->source_id : "", operation.empty() && node ? node->name : operation);
+    Span span(
+        trace_,
+        "custom.python",
+        Level::operations,
+        node ? node->id : 0,
+        node ? node->source_id : "",
+        operation.empty() && node ? node->name : operation
+    );
     try {
         RecursionGuard guard(" while calling a Syntwine Python operation");
         return fn(*args, **kwargs);
@@ -611,28 +701,40 @@ py::object Session::call(py::handle fn, const py::tuple& args, const py::dict& k
     }
 }
 
-Usage Session::validate_budget(std::string_view bytes, const Budget& budget, bool count_usage)
-{
+Usage
+Session::validate_budget(std::string_view bytes, const Budget& budget, bool count_usage) {
     return validate(bytes, budget, count_usage, {});
 }
 
-Usage Session::validate_budget(const Bytes& bytes, const Budget& budget, bool count_usage)
-{
+Usage
+Session::validate_budget(const Bytes& bytes, const Budget& budget, bool count_usage) {
     return validate(bytes.data(), budget, count_usage, bytes.data_);
 }
 
-Usage Session::validate(std::string_view bytes, const Budget& budget, bool count_usage,
-                        const std::shared_ptr<const std::string>& stable_bytes)
-{
+Usage
+Session::validate(
+    std::string_view bytes,
+    const Budget& budget,
+    bool count_usage,
+    const std::shared_ptr<const std::string>& stable_bytes
+) {
     Usage usage{};
     usage.bytes = bytes.size();
     const auto* node = active() ? active() : root_;
-    auto check = [&](std::string_view dimension, std::size_t actual, std::optional<std::size_t> limit,
+    auto check = [&](std::string_view dimension,
+                     std::size_t actual,
+                     std::optional<std::size_t> limit,
                      Span& span) {
         if (!limit || actual <= *limit)
             return;
-        Error error(ErrorCode::budget, std::string(dimension) + " budget exceeded: " +
-                    std::to_string(actual) + " > " + std::to_string(*limit));
+        Error error(
+            ErrorCode::budget,
+            std::string(dimension)
+                + " budget exceeded: "
+                + std::to_string(actual)
+                + " > "
+                + std::to_string(*limit)
+        );
         error.dimension = dimension;
         error.actual = actual;
         error.budget = limit;
@@ -640,8 +742,14 @@ Usage Session::validate(std::string_view bytes, const Budget& budget, bool count
         throw error;
     };
     auto make_span = [&](std::string_view name) {
-        return Span(trace_, name, Level::stages, node ? node->id : 0,
-                    node ? node->source_id : "", node ? node->name : "");
+        return Span(
+            trace_,
+            name,
+            Level::stages,
+            node ? node->id : 0,
+            node ? node->source_id : "",
+            node ? node->name : ""
+        );
     };
     if (count_usage) {
         auto span = make_span("output.validate");
