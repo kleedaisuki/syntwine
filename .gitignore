@@ -1,0 +1,33 @@
+/.temp/
+
+# Python
+/.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+/.coverage
+/.coverage.*
+/htmlcov/
+/dist/
+
+# C and C++ build outputs
+/build/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.pdb
