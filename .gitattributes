@@ -1,1 +1,1 @@
-syntwine/tokenizer/*.tiktoken -text -diff linguist-generated=true
+python/syntwine/tokenizer/*.tiktoken -text -diff linguist-generated=true

@@ -1,6 +1,6 @@
 # Tokenizer vocabulary provenance
 
-The rank files in `syntwine/tokenizer/` are produced by OpenAI and used unmodified. See the
+The rank files in `python/syntwine/tokenizer/` are produced by OpenAI and used unmodified. See the
 [upstream encoding descriptors](https://github.com/openai/tiktoken/blob/main/tiktoken_ext/openai_public.py)
 and included MIT license. The checksums match those listed by the upstream tokenizer.
 

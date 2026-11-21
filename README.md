@@ -151,6 +151,18 @@ interpretation.
 
 ## Develop
 
+### Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `include/syntwine/detail/` | Internal C++ headers; not installed as a public C++ SDK |
+| `src/` | Native implementations, grouped into bindings, core, formats, platform, and telemetry |
+| `python/syntwine/` | Installable Python package, type stubs, and tokenizer data |
+| `tests/native/`, `tests/python/` | C++ regression tests and installed-wheel Python tests, respectively |
+| `cmake/`, `benchmarks/`, `docs/` | Build dependencies, performance workloads, and design notes |
+
+### Build and test a wheel
+
 Use a C++23 compiler, CMake, and CPython 3.15+. Linux source builds also need
 OpenSSL 3 development headers for OTLP over HTTPS. CMake downloads pinned native
 dependencies during a source build. Build and install a wheel, then run the
@@ -160,12 +172,11 @@ integration tests against that installed artifact:
 python -m pip install build
 python -m build
 python -m pip install --force-reinstall dist/<wheel-filename>
-python -P -m unittest discover -s tests -v
+python -P -m unittest discover -s tests/python -v
 ```
 
-`-P` keeps the checkout's package from shadowing the installed wheel.
 To check the consumer typing examples, run
-`mypy --strict --python-version 3.15 tests/typing_contract.py`.
+`mypy --strict --python-version 3.15 tests/python/typing_contract.py`.
 
 ### Native development with CMake and clangd
 

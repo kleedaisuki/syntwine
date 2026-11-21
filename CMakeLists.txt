@@ -26,27 +26,30 @@ if(NOT pybind11_FOUND)
 endif()
 include(cmake/Dependencies.cmake)
 
-add_library(syntwine_platform STATIC src/tokenizer.cpp src/writer.cpp)
-target_include_directories(syntwine_platform PUBLIC src)
+add_library(syntwine_platform STATIC
+    src/platform/tokenizer.cpp
+    src/platform/writer.cpp)
+target_include_directories(syntwine_platform PRIVATE include)
 target_link_libraries(syntwine_platform PRIVATE pcre2-8)
 
 # Compile large binding translation units with bounded peak memory even in wheel builders.
 set(SYNTWINE_COMPILE_JOBS 4 CACHE STRING "Maximum concurrent binding compilations with Ninja")
 set_property(GLOBAL PROPERTY JOB_POOLS syntwine_cxx=${SYNTWINE_COMPILE_JOBS})
 pybind11_add_module(_syntwine_native MODULE NO_EXTRAS
-    src/module.cpp
-    src/core.cpp
-    src/core_bindings.cpp
-    src/budget.cpp
-    src/document.cpp
-    src/text.cpp
-    src/text_algorithms.cpp
-    src/markdown.cpp
-    src/json.cpp
-    src/toml.cpp
-    src/xml.cpp
-    src/telemetry.cpp
-    src/telemetry_sinks.cpp)
+    src/bindings/module.cpp
+    src/bindings/core_bindings.cpp
+    src/bindings/budget.cpp
+    src/core/core.cpp
+    src/core/document.cpp
+    src/formats/text.cpp
+    src/formats/text_algorithms.cpp
+    src/formats/markdown.cpp
+    src/formats/json.cpp
+    src/formats/toml.cpp
+    src/formats/xml.cpp
+    src/telemetry/telemetry.cpp
+    src/telemetry/telemetry_sinks.cpp)
+target_include_directories(_syntwine_native PRIVATE include)
 set_property(TARGET _syntwine_native PROPERTY JOB_POOL_COMPILE syntwine_cxx)
 target_link_libraries(_syntwine_native PRIVATE syntwine_platform syntwine_sqlite
     LibXml2::LibXml2 cmark jsoncons tomlplusplus::tomlplusplus CURL::libcurl)
@@ -62,13 +65,14 @@ install(TARGETS _syntwine_native LIBRARY DESTINATION syntwine)
 option(SYNTWINE_NATIVE_TESTS "Build and run native regression tests" OFF)
 if(SYNTWINE_NATIVE_TESTS)
     enable_testing()
-    add_executable(syntwine_native_tests tests/native.cpp)
+    add_executable(syntwine_native_tests tests/native/test_platform.cpp)
+    target_include_directories(syntwine_native_tests PRIVATE include)
     target_link_libraries(syntwine_native_tests PRIVATE syntwine_platform)
     if(MSVC)
         target_compile_options(syntwine_native_tests PRIVATE /utf-8)
     endif()
     add_test(NAME syntwine_native COMMAND syntwine_native_tests
-        "${PROJECT_SOURCE_DIR}/syntwine/tokenizer" "${PROJECT_BINARY_DIR}")
+        "${PROJECT_SOURCE_DIR}/python/syntwine/tokenizer" "${PROJECT_BINARY_DIR}")
     add_custom_target(syntwine_check ALL
         COMMAND "${CMAKE_CTEST_COMMAND}" --build-config "$<CONFIG>" --output-on-failure
         DEPENDS syntwine_native_tests

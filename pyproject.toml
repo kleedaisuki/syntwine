@@ -14,14 +14,14 @@ dependencies = []
 
 [tool.scikit-build]
 cmake.version = ">=3.28"
-wheel.packages = ["syntwine"]
-sdist.include = ["syntwine/tokenizer/*"]
+wheel.packages = ["python/syntwine"]
+sdist.include = ["python/syntwine/tokenizer/*"]
 
 [tool.cibuildwheel]
 build = "cp315-*"
 skip = ["*-musllinux_*", "*-win32"]
-test-sources = ["tests"]
-test-command = "python -m unittest discover -s tests -v"
+test-sources = ["tests/python"]
+test-command = "python -P -m unittest discover -s tests/python -v"
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64"]
