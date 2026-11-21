@@ -350,11 +350,21 @@ class BuildTests(WorkspaceTest):
         program = dedent(
             """
             from collections.abc import Mapping
-            from syntwine import BuildOptions, EvaluationLimit, Source
+            from syntwine import BuildOptions, EvaluationLimit, Literal, Source
+
+            def finite(remaining: int) -> Source[bytes]:
+                if remaining == 0:
+                    return Literal(b"finished")
+
+                def next_step(context: Mapping[str, object]) -> Source[bytes]:
+                    return finite(remaining - 1)
+
+                return Source.defer(next_step).as_literal()
 
             def expand(context: Mapping[str, object]) -> Source[bytes]:
                 return Source.defer(expand).as_literal()
 
+            assert finite(64).generate().bytes == b"finished"
             options = BuildOptions(max_depth=1_000_000, max_nodes=1_000_000)
             try:
                 Source.defer(expand).generate(options=options)
@@ -365,7 +375,7 @@ class BuildTests(WorkspaceTest):
             """
         )
         child = subprocess.run(
-            [sys.executable, "-c", program],
+            [sys.executable, "-P", "-c", program],
             check=False,
             capture_output=True,
             text=True,

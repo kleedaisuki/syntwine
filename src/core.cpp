@@ -17,6 +17,9 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 #elif defined(__APPLE__) || defined(__linux__)
 #include <pthread.h>
 #endif
@@ -69,17 +72,54 @@ void delete_node(const Node* node) noexcept
 
 struct StackRange {
     std::uintptr_t low = 0, high = 0;
+
+    bool contains(std::uintptr_t address) const noexcept
+    {
+        return address >= low && address < high;
+    }
 };
 
-StackRange stack_range() noexcept
-{
+// The live stack address is needed on Windows to resolve the reservation and
+// to detect switches between stacks on the same native thread.
 #if defined(_WIN32)
+StackRange stack_range(std::uintptr_t current) noexcept
+{
     ULONG_PTR low{}, high{};
     GetCurrentThreadStackLimits(&low, &high);
+    MEMORY_BASIC_INFORMATION region{};
+    if (VirtualQuery(reinterpret_cast<const void*>(current), &region, sizeof region) &&
+        region.State == MEM_COMMIT && region.Type == MEM_PRIVATE) {
+        low = reinterpret_cast<ULONG_PTR>(region.AllocationBase);
+        if (high <= current)
+            high = reinterpret_cast<ULONG_PTR>(region.BaseAddress) + region.RegionSize;
+    }
     ULONG guarantee = 0;
     SetThreadStackGuarantee(&guarantee);
     return {low + guarantee, high};
-#elif defined(__APPLE__)
+}
+
+bool stack_headroom() noexcept
+{
+#if defined(_MSC_VER)
+    auto current = reinterpret_cast<std::uintptr_t>(_AddressOfReturnAddress());
+#else
+    auto current = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
+#endif
+    static thread_local StackRange range;
+    if (!range.contains(current))
+        range = stack_range(current);
+    if (!range.contains(current))
+        return false;
+    // Reserve room for the MSVC exception dispatcher, pybind11 and callback frames.
+    auto reserve = std::clamp((range.high - range.low) / 3,
+                              std::uintptr_t{64 * 1024}, std::uintptr_t{512 * 1024});
+    return current - range.low >= reserve;
+}
+
+#else
+StackRange stack_range() noexcept
+{
+#if defined(__APPLE__)
     auto thread = pthread_self();
     auto high = reinterpret_cast<std::uintptr_t>(pthread_get_stackaddr_np(thread));
     return {high - pthread_get_stacksize_np(thread), high};
@@ -104,13 +144,14 @@ bool stack_headroom() noexcept
     static thread_local const auto range = stack_range();
     const char marker = 0;
     auto current = reinterpret_cast<std::uintptr_t>(&marker);
-    if (current < range.low || current >= range.high)
+    if (!range.contains(current))
         return true;  // CPython's recursion API still checks platform-specific or alternate stacks.
     // C++ unwinding and callback wrappers can consume more than CPython's own reserve.
     auto reserve = std::clamp((range.high - range.low) / 4,
                               std::uintptr_t{16 * 1024}, std::uintptr_t{128 * 1024});
     return current - range.low >= reserve;
 }
+#endif
 
 struct RecursionGuard {
     explicit RecursionGuard(const char* where)
