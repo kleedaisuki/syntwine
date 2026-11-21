@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <exception>
+#include <mutex>
 #include <random>
 
 #ifndef _WIN32
@@ -63,7 +64,8 @@ Config make_config(bool enabled, bool traces, bool metrics, bool events,
 struct Controls {
     py::object context;
     std::atomic<bool> has_context = false;
-    std::atomic<std::shared_ptr<const Config>> global;
+    mutable std::mutex global_mutex;
+    std::optional<Config> global;
 };
 
 const std::string controls_key = "syntwine.telemetry.controls";
@@ -90,9 +92,8 @@ std::optional<Config> get_config(py::handle explicit_config) {
         if (!config.is_none())
             return config.cast<Config>();
     }
-    if (auto config = ctl->global.load(std::memory_order_acquire))
-        return *config;
-    return std::nullopt;
+    const std::lock_guard guard(ctl->global_mutex);
+    return ctl->global;
 }
 
 std::mt19937_64 seed_generator() {
@@ -509,8 +510,9 @@ void bind(py::module_& module) {
         .def_readonly("max_events", &Config::max_events)
         .def_readonly("max_content_bytes", &Config::max_content_bytes);
     mod.def("configure", [](const Config& config) {
-        controls()->global.store(config.enabled ? std::make_shared<const Config>(config) : nullptr,
-                                 std::memory_order_release);
+        auto* ctl = controls();
+        const std::lock_guard guard(ctl->global_mutex);
+        ctl->global = config.enabled ? std::optional(config) : std::nullopt;
         if (config.enabled)
             has_default_or_context.store(true, std::memory_order_release);
     }, py::arg("config"));
