@@ -37,7 +37,7 @@ from ._syntwine_native import (
 )
 from .typing import JSONValue, TOMLTable, TOMLValue
 
-_native._set_tokenizer_data_dir(_Path(__file__).with_name("tokenizer"))
+_native._set_tokenizer_data_dir(_Path(_native.__file__).with_name("tokenizer"))
 
 __all__ = [
     "JSON",

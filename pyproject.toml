@@ -15,6 +15,7 @@ dependencies = []
 [tool.scikit-build]
 cmake.version = ">=3.28"
 wheel.packages = ["python/syntwine"]
+wheel.exclude = ["*.tiktoken"]
 sdist.include = ["python/syntwine/tokenizer/*"]
 
 [tool.cibuildwheel]

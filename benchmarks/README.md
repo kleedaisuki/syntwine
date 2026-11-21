@@ -40,3 +40,136 @@ To reproduce the fan-out check, run the following with `N` equal to `10000` or
 ```console
 python benchmarks/bench.py --case construct-fanout --case extend-fanout --parts N --rows 1 --repeat 5 --warmup 1
 ```
+
+## Published v0.1.0 Linux wheel (2026-11-21)
+
+The installed `cp315-cp315-manylinux_2_34_x86_64` release wheel was measured
+in a Linux x86-64 KVM guest with a QEMU virtual CPU and CPython 3.15.2.
+Run `python -P benchmarks/bench.py --repeat 7 --warmup 2` with the default
+1,000 Parts and 10,000 rows. These are medians for the runner's synthetic
+fixtures, not cross-platform throughput or latency guarantees.
+
+| Workload | Median |
+| --- | ---: |
+| Launch interpreter and import Syntwine | 71.0 ms |
+| Generate an existing eight-Part document | 11.4 µs |
+| Assemble 1,000 prebuilt Parts, `+=` / `extend()` | 1.36 / 0.155 ms |
+| Generate 1,000 Parts discovered by `bind()` | 2.65 ms |
+| Read and squish 970,000 bytes of Markdown | 69.2 ms |
+| Count 430,000 bytes with warm `o200k_base` | 45.0 ms |
+| Eight-Part document, tracing off / full spans in memory | 10.9 / 333.8 µs |
+
+The first `o200k_base` count of a short string after import took 143.3 ms
+median (five fresh interpreters, timing the first `generate()` only).
+That initialization is excluded from the warm counting benchmark.
+
+### Where the overhead goes
+
+Follow-up on the same installed wheel and VM, with a warm OS file cache:
+
+- **Process vs. import:** 13 interleaved pairs of fresh subprocesses gave
+  29.6 ms for `python -P -c "pass"` and 69.7 ms for
+  `python -P -c "import syntwine"`. The median paired difference was
+  39.4 ms. In seven separate `-X importtime` runs, the cumulative Syntwine
+  import took 33.4 ms, including 8.9 ms for the native extension.
+- **Tokenizer initialization:** a standalone GCC 16.2 `-O3` probe of the
+  release's tokenizer source timed regex setup, reading the shipped rank
+  file, and constructing the in-memory index. In 15 interleaved runs per
+  variant, replacing iterator reads with one sized read reduced median read
+  time from 19.4 to 4.2 ms and total initialization from 136.3 to 120.1 ms.
+  Index construction still took about 115–117 ms. A separate two-pass probe
+  (nine runs) split that work into about 33 ms for reservations and text
+  decoding and 87 ms for hash table insertion. This is an isolated native
+  experiment, not a change to the released wheel.
+- **Telemetry:** on the same eight-Part fixture as above, interleaved batches
+  of 100 calls gave medians of 12 µs off, 23 µs metrics-only
+  (`traces=False, events=False`), 37 µs at `build`, 97 µs at `stages`,
+  341 µs at `operations` without a sink, and 349 µs at `operations` with a
+  memory sink (12 measured batches after one warm-up). The full trace had
+  44 spans, one event, and 16 edges. Its internal duration with the memory
+  sink was 44 µs; independently projecting one already-recorded trace via
+  `MemorySink.snapshot()` took 260 µs. The internal duration ends before
+  sink submission and Python projection and does not include every call
+  cost. The independent snapshot confirms that constructing the Python view
+  through an intermediate JSON tree accounts for most of the extra latency.
+
+For short-lived processes, rank table construction offers more cold-start
+headroom than changing file reads alone. For full tracing, prioritize
+on-demand or direct Python projection before optimizing the queue or clocks.
+
+### Bulk text loader experiment
+
+The intermediate text loader read the same shipped rank files in bulk and inserted decoded
+keys into a contiguous, open-addressed index instead of allocating one hash
+node per key. Each slot stores an offset into shared byte storage, a length,
+and a rank. The file format, pretokenization, and BPE rules are unchanged.
+
+Paired Linux test with CPython 3.15.2 and GCC 16.2 `-O3`: link the same
+native module objects twice, changing only the tokenizer object; run 13
+interleaved fresh Python processes per variant. Time the first
+`Text("Hello, Klee!").generate(tokenizer="o200k_base")` after import, then
+measure warm counts in the same process.
+
+| Workload | Before | After |
+| --- | ---: | ---: |
+| First `o200k_base` count, excluding import | 178.2 ms | 84.5 ms |
+| Warm count, repository README repeated 64 times | 86.8 ms | 45.9 ms |
+| Warm count, 430,000-byte multilingual fixture | 46.3 ms | 38.1 ms |
+
+Counts matched tiktoken 0.14.0 for 6,725 inputs per vocabulary across the
+four distinct built-in rank tables (26,900 comparisons).
+
+### Precompiled vocabulary prototype
+
+A Linux-only standalone GCC 16.2 `-O3` experiment moved Base64 decoding and
+hash insertion to a packer. The compact binary contains a versioned
+little-endian header, 32-bit slots containing rank plus one (zero means an
+empty slot), a rank-to-offset array, and the token bytes. Rank gaps, such as
+in `p50k_base`, are preserved. The direct layout puts offset, length, and
+rank in each slot instead. Both use a specified FNV-1a hash and compare
+token bytes on a candidate hit.
+
+Medians of 11 interleaved runs per variant in fresh processes, with a warm
+OS file cache. The first count uses the short `Hello, Klee!` input; it
+includes regex setup but not interpreter startup or Python import.
+
+| Data and loading | First count | Warm README × 64 | Warm multilingual |
+| --- | ---: | ---: | ---: |
+| Text ranks, runtime index | 72.28 ms | 26.17 ms | 23.50 ms |
+| Compact binary, bulk read | 5.88 ms | 31.57 ms | 22.67 ms |
+| Compact binary, read-only mmap | 0.75 ms | 34.86 ms | 25.12 ms |
+| Direct binary, bulk read | 8.69 ms | 30.68 ms | 21.36 ms |
+| Direct binary, read-only mmap | 0.74 ms | 29.47 ms | 22.37 ms |
+
+The compact mapped prototype agreed with tiktoken 0.14.0 on all 26,900
+reference comparisons. Across all four rank tables, deflating each asset
+with zlib gave 3.21 MB total for text, 3.64 MB for compact binaries, and
+4.95 MB for direct binaries (estimates of the vocabulary payload, not
+measurements of a rebuilt wheel).
+
+For production, keep the upstream text as canonical source, generate the
+versioned index at build time, and compare the stable hash and lookup layout
+against the current warm path before selecting a format. Bulk read captures
+most of the cold-start benefit without platform-specific mapping code.
+
+### Packed binary indexes
+
+The implemented format packs the offset, length, and rank in eight bytes per
+slot, avoiding the extra offset array of the compact prototype. It uses a
+fixed MurmurHash64A and validates the data in one pass, leaving no per-slot
+bounds checks on the lookup path. The `o200k_base` index occupies 5.59 MB.
+
+Standalone native comparison on the same Linux VM, using GCC 16.2 `-O3` and
+pinning all variants to the same logical CPU. The following are medians of
+17 randomly interleaved runs per variant, with the same rank files, text
+fixtures and first-count timing as the prototype above.
+
+| Data and loading | First count | Warm README × 64 | Warm multilingual |
+| --- | ---: | ---: | ---: |
+| Bulk text and runtime flat index | 78.71 ms | 35.31 ms | 27.99 ms |
+| Packed index, one bulk read and validation | 9.88 ms | 27.28 ms | 23.91 ms |
+
+Median paired runtime ratios (binary / text) were 0.130, 0.861, and 0.945,
+respectively. The bundled binary indexes use about 4.60 MB combined after
+deflate, compared with 3.21 MB for the original text payload. These are
+native fixture measurements, not timings for interpreter startup.

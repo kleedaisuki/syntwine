@@ -26,11 +26,27 @@ if(NOT pybind11_FOUND)
 endif()
 include(cmake/Dependencies.cmake)
 
+set(vocabulary_compiler "${CMAKE_CURRENT_SOURCE_DIR}/cmake/compile_vocabulary.py")
+set(vocabulary_dir "${CMAKE_CURRENT_BINARY_DIR}/tokenizer")
+set(vocabulary_indexes "")
+foreach(encoding IN ITEMS o200k_base cl100k_base p50k_base r50k_base)
+    set(rank_file "${CMAKE_CURRENT_SOURCE_DIR}/python/syntwine/tokenizer/${encoding}.tiktoken")
+    set(index_file "${vocabulary_dir}/${encoding}.bin")
+    add_custom_command(
+        OUTPUT "${index_file}"
+        COMMAND "${Python_EXECUTABLE}" "${vocabulary_compiler}" "${rank_file}" "${index_file}"
+        DEPENDS "${vocabulary_compiler}" "${rank_file}"
+        VERBATIM)
+    list(APPEND vocabulary_indexes "${index_file}")
+endforeach()
+add_custom_target(syntwine_vocabularies DEPENDS ${vocabulary_indexes})
+
 add_library(syntwine_platform STATIC
     src/platform/tokenizer.cpp
     src/platform/writer.cpp)
 target_include_directories(syntwine_platform PRIVATE include)
 target_link_libraries(syntwine_platform PRIVATE pcre2-8)
+add_dependencies(syntwine_platform syntwine_vocabularies)
 
 # Compile large binding translation units with bounded peak memory even in wheel builders.
 set(SYNTWINE_COMPILE_JOBS 4 CACHE STRING "Maximum concurrent binding compilations with Ninja")
@@ -61,6 +77,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_options(_syntwine_native PRIVATE "LINKER:--exclude-libs,ALL")
 endif()
 install(TARGETS _syntwine_native LIBRARY DESTINATION syntwine)
+install(FILES ${vocabulary_indexes} DESTINATION syntwine/tokenizer)
 
 option(SYNTWINE_NATIVE_TESTS "Build and run native regression tests" OFF)
 if(SYNTWINE_NATIVE_TESTS)
@@ -72,7 +89,7 @@ if(SYNTWINE_NATIVE_TESTS)
         target_compile_options(syntwine_native_tests PRIVATE /utf-8)
     endif()
     add_test(NAME syntwine_native COMMAND syntwine_native_tests
-        "${PROJECT_SOURCE_DIR}/python/syntwine/tokenizer" "${PROJECT_BINARY_DIR}")
+        "${vocabulary_dir}" "${PROJECT_BINARY_DIR}")
     add_custom_target(syntwine_check ALL
         COMMAND "${CMAKE_CTEST_COMMAND}" --build-config "$<CONFIG>" --output-on-failure
         DEPENDS syntwine_native_tests

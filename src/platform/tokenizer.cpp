@@ -1,16 +1,16 @@
 #include "syntwine/detail/platform/tokenizer.hpp"
 
 #include <algorithm>
-#include <charconv>
+#include <bit>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
-#include <iterator>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <queue>
 #include <stdexcept>
-#include <unordered_map>
 #include <vector>
 
 #define PCRE2_CODE_UNIT_WIDTH 8
@@ -28,7 +28,32 @@ std::mutex tokenizer_directory_lock;
 std::filesystem::path
 vocabulary_path(std::string_view name) {
     const std::lock_guard lock(tokenizer_directory_lock);
-    return tokenizer_directory / (std::string(name) + ".tiktoken");
+    return tokenizer_directory / (std::string(name) + ".bin");
+}
+
+std::string
+read_vocabulary(std::string_view name) {
+    std::ifstream input(vocabulary_path(name), std::ios::binary | std::ios::ate);
+    if (!input)
+        throw std::runtime_error(
+            "cannot open installed tokenizer vocabulary: " + std::string(name)
+        );
+    const auto size = static_cast<std::streamoff>(input.tellg());
+    if (size == 0)
+        throw std::runtime_error("empty tokenizer vocabulary: " + std::string(name));
+    if (size < 0
+        || size > std::numeric_limits<std::uint32_t>::max()
+        || size > std::numeric_limits<std::streamsize>::max())
+        throw std::runtime_error(
+            "invalid installed tokenizer vocabulary size: " + std::string(name)
+        );
+    std::string text(static_cast<std::size_t>(size), '\0');
+    input.seekg(0);
+    if (!input.read(text.data(), static_cast<std::streamsize>(text.size())))
+        throw std::runtime_error(
+            "cannot read installed tokenizer vocabulary: " + std::string(name)
+        );
+    return text;
 }
 
 constexpr std::string_view r50k_pattern =
@@ -44,33 +69,132 @@ constexpr std::string_view o200k_pattern =
     R"(|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]++[\p{Ll}\p{Lm}\p{Lo}\p{M}]*+(?i:'s|'t|'re|'ve|'m|'ll|'d)?)"
     R"(|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n/]*+|(?:\h*+[\r\n])++|\s+(?!\S)|\s+)";
 
-unsigned
-base64_digit(unsigned char c) {
-    if (c >= 'A' && c <= 'Z')
-        return c - 'A';
-    if (c >= 'a' && c <= 'z')
-        return c - 'a' + 26;
-    if (c >= '0' && c <= '9')
-        return c - '0' + 52;
-    if (c == '+' || c == '/')
-        return c == '+' ? 62 : 63;
-    throw std::runtime_error("invalid tokenizer vocabulary");
+template <class UInt>
+UInt
+load_little(const char* data) noexcept {
+    UInt word;
+    std::memcpy(&word, data, sizeof(word));
+    if constexpr (std::endian::native == std::endian::big)
+        return std::byteswap(word);
+    return word;
 }
 
-void
-decode_base64(std::string_view text, std::string& out) {
-    unsigned accumulator = 0, bits = 0;
-    for (const auto c : text) {
-        if (c == '=')
-            break;
-        accumulator = (accumulator << 6) | base64_digit(static_cast<unsigned char>(c));
-        bits += 6;
-        if (bits < 8)
-            continue;
-        bits -= 8;
-        out.push_back(static_cast<char>((accumulator >> bits) & 255));
+std::uint64_t
+tail_word(std::string_view token) noexcept {
+    // At most seven bytes remain: load the available 4-, 2-, and 1-byte groups.
+    const auto size = token.size();
+    const auto* data = token.data();
+    std::uint64_t result = 0;
+    if (size & 4)
+        result = load_little<std::uint32_t>(data);
+    if (size & 2) {
+        const auto offset = size & 4;
+        result |= std::uint64_t(load_little<std::uint16_t>(data + offset)) << (8 * offset);
     }
+    if (size & 1) {
+        const auto offset = size & 6;
+        result |= std::uint64_t(static_cast<unsigned char>(data[offset])) << (8 * offset);
+    }
+    return result;
 }
+
+std::uint64_t
+vocabulary_hash(std::string_view token) noexcept {
+    // MurmurHash64A over little-endian words, with constants fixed by the index format.
+    constexpr std::uint64_t mix = 0xc6a4a7935bd1e995ULL;
+    constexpr unsigned shift = 47;
+    auto hash = 0xc70f6907ULL ^ (static_cast<std::uint64_t>(token.size()) * mix);
+    while (token.size() >= 8) {
+        auto word = load_little<std::uint64_t>(token.data()) * mix;
+        word ^= word >> shift;
+        hash = (hash ^ (word * mix)) * mix;
+        token.remove_prefix(8);
+    }
+    if (!token.empty())
+        hash = (hash ^ tail_word(token)) * mix;
+    hash ^= hash >> shift;
+    hash *= mix;
+    return hash ^ (hash >> shift);
+}
+
+class Vocabulary {
+public:
+    explicit Vocabulary(std::string_view name)
+        : bytes_(read_vocabulary(name)) {
+        if (bytes_.size() < header_size || !bytes_.starts_with("SVOCAB01"))
+            throw std::runtime_error("unsupported tokenizer vocabulary header");
+        const auto* header = bytes_.data();
+        const auto capacity = load_little<std::uint32_t>(header + 8);
+        const auto entries = load_little<std::uint32_t>(header + 12);
+        max_length_ = load_little<std::uint32_t>(header + 16);
+        const auto token_size = load_little<std::uint32_t>(header + 20);
+        const auto available = bytes_.size() - header_size;
+        if (!std::has_single_bit(capacity)
+            || capacity > available / slot_size
+            || entries > capacity / 2
+            || entries < 256
+            || max_length_ == 0
+            || max_length_ > 255)
+            throw std::runtime_error("invalid tokenizer vocabulary dimensions");
+        const auto table_size = std::size_t(capacity) * slot_size;
+        if (token_size != available - table_size)
+            throw std::runtime_error("invalid tokenizer vocabulary size");
+        token_offset_ = header_size + table_size;
+        mask_ = capacity - 1;
+        validate_slots(entries, token_size);
+    }
+
+    Rank
+    rank_of(std::string_view token) const noexcept {
+        if (token.size() > max_length_)
+            return unranked;
+        auto index = static_cast<std::size_t>(vocabulary_hash(token)) & mask_;
+        const auto* data = bytes_.data() + token_offset_;
+        while (const auto slot = load_slot(index)) {
+            if (slot >> 56 == token.size()) {
+                const auto offset = static_cast<std::uint32_t>(slot);
+                if (std::string_view(data + offset, token.size()) == token)
+                    return static_cast<Rank>(slot >> 32 & rank_mask) - 1;
+            }
+            index = (index + 1) & mask_;
+        }
+        return unranked;
+    }
+
+private:
+    static constexpr std::size_t header_size = 24;
+    static constexpr std::size_t slot_size = sizeof(std::uint64_t);
+    static constexpr std::uint64_t rank_mask = 0xffffff;
+
+    std::uint64_t
+    load_slot(std::size_t index) const noexcept {
+        return load_little<std::uint64_t>(bytes_.data() + header_size + index * slot_size);
+    }
+
+    void
+    validate_slots(std::uint32_t expected, std::size_t token_size) const {
+        std::size_t occupied = 0;
+        for (std::size_t index = 0; index <= mask_; ++index) {
+            const auto slot = load_slot(index);
+            if (slot == 0)
+                continue;
+            const auto offset = static_cast<std::uint32_t>(slot);
+            const auto length = slot >> 56;
+            if ((slot >> 32 & rank_mask) == 0
+                || length == 0
+                || length > max_length_
+                || offset > token_size
+                || length > token_size - offset)
+                throw std::runtime_error("invalid tokenizer vocabulary slot");
+            ++occupied;
+        }
+        if (occupied != expected)
+            throw std::runtime_error("invalid tokenizer vocabulary entry count");
+    }
+
+    std::string bytes_;
+    std::size_t token_offset_{}, mask_{}, max_length_{};
+};
 
 using Pattern = std::unique_ptr<pcre2_code, decltype(&pcre2_code_free)>;
 
@@ -138,42 +262,8 @@ struct Merge {
 class Encoding {
 public:
     Encoding(std::string_view name, std::string_view pattern)
-        : pattern_(compile_pattern(pattern)) {
-        auto input = std::ifstream(vocabulary_path(name), std::ios::binary);
-        if (!input)
-            throw std::runtime_error(
-                "cannot open installed tokenizer vocabulary: " + std::string(name)
-            );
-        const std::string ranks{std::istreambuf_iterator<char>(input), {}};
-        if (ranks.empty())
-            throw std::runtime_error("empty tokenizer vocabulary");
-        storage_.reserve(ranks.size());
-        ranks_.reserve(static_cast<std::size_t>(std::count(ranks.begin(), ranks.end(), '\n')));
-        auto rest = std::string_view(ranks);
-        while (!rest.empty()) {
-            const auto newline = rest.find('\n');
-            auto line = rest.substr(0, newline);
-            rest.remove_prefix(newline == rest.npos ? rest.size() : newline + 1);
-            if (line.ends_with('\r'))
-                line.remove_suffix(1);
-            const auto sep = line.find(' ');
-            if (sep == line.npos)
-                throw std::runtime_error("invalid tokenizer vocabulary line");
-            Rank rank{};
-            const auto end = line.data() + line.size();
-            const auto [pos, error] = std::from_chars(line.data() + sep + 1, end, rank);
-            if (error != std::errc{} || pos != end)
-                throw std::runtime_error("invalid tokenizer vocabulary line");
-            const auto start = storage_.size();
-            decode_base64(line.substr(0, sep), storage_);
-            ranks_.emplace(std::string_view(storage_).substr(start), rank);
-        }
-        for (unsigned i = 0; i < 256; ++i) {
-            const auto byte = static_cast<char>(i);
-            if (rank_of(std::string_view(&byte, 1)) == unranked)
-                throw std::runtime_error("tokenizer vocabulary missing byte");
-        }
-    }
+        : pattern_(compile_pattern(pattern)),
+          vocabulary_(name) {}
 
     std::size_t
     count(std::string_view input) const {
@@ -258,15 +348,9 @@ private:
         );
     }
 
-    Rank
-    rank_of(std::string_view token) const {
-        const auto it = ranks_.find(token);
-        return it == ranks_.end() ? unranked : it->second;
-    }
-
     std::size_t
     count_piece(std::string_view piece) const {
-        if (piece.size() == 1 || rank_of(piece) != unranked)
+        if (piece.size() == 1 || vocabulary_.rank_of(piece) != unranked)
             return 1;
         // Most pieces are short. A small stack buffer avoids heap allocation in the common case.
         if (piece.size() < 48)
@@ -284,7 +368,8 @@ private:
             Rank best = unranked;
             std::size_t at = 0;
             for (std::size_t i = 0; i + 1 < size; ++i) {
-                const auto rank = rank_of(piece.substr(offsets[i], offsets[i + 2] - offsets[i]));
+                const auto rank =
+                    vocabulary_.rank_of(piece.substr(offsets[i], offsets[i + 2] - offsets[i]));
                 if (rank < best) {
                     best = rank;
                     at = i + 1;
@@ -312,7 +397,7 @@ private:
             if (split == piece.size())
                 return;
             const auto end = chain[split].next;
-            const auto rank = rank_of(piece.substr(left, end - left));
+            const auto rank = vocabulary_.rank_of(piece.substr(left, end - left));
             if (rank != unranked)
                 merges.push({rank, left, split, end});
         };
@@ -337,8 +422,7 @@ private:
     }
 
     Pattern pattern_;
-    std::string storage_;
-    std::unordered_map<std::string_view, Rank> ranks_;
+    Vocabulary vocabulary_;
 };
 
 } // namespace

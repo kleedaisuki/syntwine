@@ -85,8 +85,9 @@ boundaries; no budget accumulates estimates from individual Parts.
 
 The built-in tokenizers implement ordinary-text byte pair encoding (BPE) with the
 [upstream tiktoken patterns and rank tables](https://github.com/openai/tiktoken/blob/main/tiktoken_ext/openai_public.py).
-Vocabulary data ships in the wheel and is loaded only for the named encoding; terminal calls
-do not download data. PCRE2 is pinned to the Unicode property version used by the reference
+[Precompiled vocabulary indexes](tokenizer-vocabularies.md#compiled-index) ship in the wheel
+and are loaded only for the named encoding; terminal calls do not download data.
+PCRE2 is pinned to the Unicode property version used by the reference
 tokenizer (Unicode 16), and whitespace follows that version's `White_Space` property.
 Strings resembling control tokens are counted as ordinary input text. Values for
 `gpt2`/`r50k_base`, `p50k_base`/`p50k_edit`, and `o200k_base`/`o200k_harmony` share
