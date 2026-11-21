@@ -5,6 +5,10 @@ reads, graph evaluation, parsing, document composition, final budgets, and
 telemetry run in a C++23 engine. Python expressions declare the graph and
 supply callbacks and build context.
 
+For Codex and compatible agents, [`$syntwine`](.agents/skills/syntwine/SKILL.md)
+provides a quick start and task-specific references for formats, lazy graphs,
+and build diagnostics.
+
 ## Assemble and build
 
 ```python
